@@ -1,12 +1,11 @@
-<MudThemeProvider IsDarkMode="true" />
+<MudThemeProvider Theme="SiteTheme.Theme" IsDarkMode="true" />
 <MudPopoverProvider />
 <MudDialogProvider />
 <MudSnackbarProvider />
 
 <MudLayout>
-    <MudAppBar Elevation="1" Dense="true">
-        <MudIcon Icon="@Icons.Material.Filled.MyLocation" Class="mr-2" />
-        <MudText Typo="Typo.h6">Stalker 2 Tracker</MudText>
+    <MudAppBar Elevation="0" Class="app-header">
+        <Wordmark />
     </MudAppBar>
     <MudMainContent>
         <MudContainer MaxWidth="MaxWidth.Medium" Class="py-4">

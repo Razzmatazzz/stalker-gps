@@ -1,0 +1,33 @@
+# Builds the app on every push to main and keeps the result as a workflow artifact.
+# The "Draft release" workflow publishes the latest successful build from here.
+name: Build
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Publish
+        run: dotnet publish StalkerGPS/StalkerGPS.csproj -c Release -r win-x64 --self-contained false -o publish
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: StalkerGPS
+          path: publish/
+          if-no-files-found: error

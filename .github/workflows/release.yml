@@ -1,0 +1,65 @@
+# Run manually from the Actions tab. Takes the latest successful "Build" run on main, zips it,
+# and creates a draft release tagged at that build's commit. Review and publish the draft on GitHub.
+name: Draft release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to release, e.g. 1.0.0 (tagged as v1.0.0)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      VERSION: ${{ inputs.version }}
+    steps:
+      - name: Check version
+        run: |
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Version must look like 1.0.0 or 1.0.0-beta.1 (got '$VERSION')."
+            exit 1
+          fi
+          TAG="v$VERSION"
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "::error::A release for $TAG already exists."
+            exit 1
+          fi
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+
+      - name: Find the latest build
+        run: |
+          read -r RUN_ID SHA < <(gh run list --workflow build.yml --branch main --status success --limit 1 \
+            --json databaseId,headSha --jq '.[0] // empty | "\(.databaseId) \(.headSha)"') || true
+          if [[ -z "$RUN_ID" ]]; then
+            echo "::error::No successful build of main was found."
+            exit 1
+          fi
+          echo "Using build run $RUN_ID (commit $SHA)."
+          echo "RUN_ID=$RUN_ID" >> "$GITHUB_ENV"
+          echo "SHA=$SHA" >> "$GITHUB_ENV"
+
+      - name: Download the build
+        run: gh run download "$RUN_ID" --name StalkerGPS --dir publish
+
+      - name: Zip
+        run: |
+          ZIP="StalkerGPS-$TAG.zip"
+          (cd publish && zip -r -q "../$ZIP" .)
+          echo "ZIP=$ZIP" >> "$GITHUB_ENV"
+
+      - name: Create draft release
+        run: |
+          gh release create "$TAG" "$ZIP" \
+            --draft \
+            --target "$SHA" \
+            --title "Stalker Vodka GPS $TAG" \
+            --generate-notes

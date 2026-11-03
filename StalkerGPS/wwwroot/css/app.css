@@ -1,0 +1,220 @@
+/* Styles match the stalker-vodka website (app/globals.css). Keep colors in sync with SiteTheme.cs. */
+:root {
+    --sv-ink: #e9e6da;
+    --sv-muted: #9b9c8d;
+    --sv-dim: #65695c;
+    --sv-ground: #11130f;
+    --sv-panel: #191c16;
+    --sv-line: #303329;
+    --sv-acid: #c2d25b;
+    --sv-ember: #e0883c;
+    --sv-mono: "DM Mono", monospace;
+    --sv-display: "Barlow Condensed", Impact, sans-serif;
+    --sv-body: "DM Sans", sans-serif;
+}
+
+html {
+    /* Dark native scrollbars and form controls. */
+    color-scheme: dark;
+}
+
+body {
+    -webkit-font-smoothing: antialiased;
+}
+
+/* Panels: flat, square, 1px line border (like .artifact-card). */
+.sv-panel {
+    background: var(--sv-panel);
+    border: 1px solid var(--sv-line);
+    padding: 16px;
+}
+
+.sv-panel p {
+    margin: 0;
+}
+
+.sv-status-row {
+    align-items: center;
+    display: flex;
+    gap: 16px;
+    justify-content: space-between;
+}
+
+/* Status line, styled like the site's .eyebrow with its status dot. */
+.sv-eyebrow {
+    align-items: center;
+    display: flex;
+    font-family: var(--sv-mono);
+    font-size: 11px;
+    gap: 10px;
+    letter-spacing: 0.105em;
+    text-transform: uppercase;
+}
+
+.sv-eyebrow > span {
+    border-radius: 50%;
+    display: inline-block;
+    height: 6px;
+    width: 6px;
+}
+
+.sv-status-ok { color: var(--sv-acid); }
+.sv-status-ok > span { background: var(--sv-acid); box-shadow: 0 0 8px var(--sv-acid); }
+.sv-status-warn { color: var(--sv-ember); }
+.sv-status-warn > span { background: var(--sv-ember); }
+.sv-status-info { color: #83a9a3; }
+.sv-status-info > span { background: #83a9a3; }
+.sv-status-error { color: #d9644a; }
+.sv-status-error > span { background: #d9644a; }
+.sv-status-idle { color: var(--sv-muted); }
+.sv-status-idle > span { background: var(--sv-dim); }
+
+.sv-copy {
+    color: #b4b4a8;
+    font-size: 13px;
+    line-height: 1.6;
+    margin-top: 12px !important;
+}
+
+.sv-error {
+    color: #d9644a;
+}
+
+.sv-highlight {
+    color: var(--sv-ink);
+    font-family: var(--sv-mono);
+    font-size: 12px;
+}
+
+.sv-meta {
+    color: var(--sv-dim);
+    font-family: var(--sv-mono);
+    font-size: 10px;
+    margin-top: 6px !important;
+}
+
+/* Coordinates */
+.sv-coords {
+    display: grid;
+    gap: 12px;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+@media (max-width: 700px) {
+    .sv-coords {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+.sv-coord {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.sv-label {
+    color: var(--sv-muted);
+    font-family: var(--sv-mono);
+    font-size: 10px;
+    letter-spacing: 0.105em;
+    text-transform: uppercase;
+}
+
+.sv-value {
+    color: var(--sv-ink);
+    font-family: var(--sv-display);
+    font-size: 44px;
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    line-height: 1;
+}
+
+/* Settings panel */
+.sv-settings .mud-expand-panel {
+    background: var(--sv-panel);
+    border: 1px solid var(--sv-line);
+}
+
+.sv-settings .mud-input,
+.sv-settings .mud-switch .mud-typography {
+    font-size: 13px;
+}
+
+.sv-settings .mud-input-label {
+    font-family: var(--sv-mono);
+    font-size: 12px;
+    letter-spacing: 0.05em;
+}
+
+.sv-settings .mud-expand-panel-content > .mud-stack > .mud-typography-body2 {
+    color: var(--sv-dim);
+    font-family: var(--sv-mono);
+    font-size: 10px;
+}
+
+.sv-settings .mud-expand-panel-header .mud-expand-panel-text {
+    color: var(--sv-ink);
+    font-family: var(--sv-display);
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.app-header.mud-appbar {
+    background: var(--sv-ground);
+    border-bottom: 1px solid #272a23;
+}
+
+.app-wordmark {
+    align-items: center;
+    display: inline-flex;
+    font-family: var(--sv-display);
+    font-size: 20px;
+    font-weight: 700;
+    gap: 12px;
+    letter-spacing: 0.055em;
+    white-space: nowrap;
+}
+
+.app-wordmark .wordmark {
+    display: inline-block;
+    height: 44px;
+    position: relative;
+    width: 200px;
+}
+
+.app-wordmark .wordmark-bottle {
+    height: 100%;
+    inset: 0;
+    overflow: visible;
+    position: absolute;
+    width: 100%;
+}
+
+.app-wordmark .wordmark-bottle path {
+    fill: none;
+    stroke: var(--sv-ink);
+    stroke-opacity: 0.65;
+    stroke-width: 1.2;
+    vector-effect: non-scaling-stroke;
+}
+
+.app-wordmark .wordmark-text {
+    color: var(--sv-ember);
+    left: 60%;
+    line-height: 44px;
+    position: absolute;
+    top: 0;
+    transform: translateX(-50%);
+    z-index: 1;
+}
+
+.app-wordmark .wordmark-light {
+    color: var(--sv-acid);
+}
+
+.app-wordmark .wordmark-suffix {
+    color: var(--sv-ink);
+}

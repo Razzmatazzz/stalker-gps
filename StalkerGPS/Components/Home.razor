@@ -1,0 +1,186 @@
+@implements IDisposable
+@inject PositionTracker Tracker
+@inject PositionServer Server
+@inject SettingsStore Settings
+@inject ISnackbar Snackbar
+
+<MudStack Spacing="3">
+    <section class="sv-panel">
+        <div class="sv-status-row">
+            <p class="sv-eyebrow sv-status-@StatusTone"><span></span>@StatusText</p>
+            @if (ShowDiagnostics && Tracker.ProcessId is int pid)
+            {
+                <span class="sv-meta">PID @pid · base 0x@(Tracker.ModuleBase.ToString("X"))</span>
+            }
+        </div>
+        @if (ShowDiagnostics)
+        {
+            @if (Tracker.PawnClass is { } pawn && Tracker.Status == TrackerStatus.Attached)
+            {
+                <p class="sv-copy">Tracking <span class="sv-highlight">@pawn</span></p>
+            }
+            else if (!string.IsNullOrEmpty(Tracker.Message))
+            {
+                <p class="sv-copy">@Tracker.Message</p>
+            }
+            @if (Tracker.EngineSummary is { } summary)
+            {
+                <p class="sv-meta">@summary</p>
+            }
+            @if (Server.Port is int port)
+            {
+                <p class="sv-meta">Map server ws://localhost:@port · @Server.ClientCount connected</p>
+            }
+        }
+        @* Shown in every build: without the server the map can't receive positions. *@
+        @if (Server.Error is { } serverError)
+        {
+            <p class="sv-copy sv-error">@serverError</p>
+        }
+    </section>
+
+    <div class="sv-coords">
+        @foreach (var (axis, value) in Axes)
+        {
+            <section class="sv-panel sv-coord">
+                <span class="sv-label">@axis</span>
+                <span class="sv-value">@(value is double d ? (d / 100).ToString("N2") : "—")</span>
+            </section>
+        }
+        <section class="sv-panel sv-coord">
+            <span class="sv-label">Heading</span>
+            <span class="sv-value">@(Tracker.Position?.Yaw is double yaw ? $"{yaw:N0}°" : "—")</span>
+        </section>
+    </div>
+
+    <MudExpansionPanels Outlined="true" Elevation="0" Class="sv-settings">
+        <MudExpansionPanel Text="Settings">
+            <MudStack Spacing="2">
+                <MudText Typo="Typo.body2" Class="mud-text-secondary">Saved to @Settings.FilePath</MudText>
+                <MudTextField @bind-Value="_processNames" Label="Process names (comma separated, no .exe)" Variant="Variant.Outlined" />
+                <MudNumericField @bind-Value="_pollIntervalMs" Label="Position update interval while the game is running (ms)" Min="10" Max="2000" Variant="Variant.Outlined" />
+                <MudNumericField @bind-Value="_gameCheckIntervalSeconds" Label="Check for the game every (seconds)" Min="1" Max="300" Variant="Variant.Outlined" />
+                <MudNumericField @bind-Value="_webSocketPort" Label="Map connection port" Min="1024" Max="65535" Variant="Variant.Outlined"
+                                 HelperText="The stalker.vodka map connects to ws://localhost on this port." />
+                <MudSwitch @bind-Value="_minimizeToTray" Color="Color.Primary" Label="Minimize to tray" />
+                <MudSwitch @bind-Value="_startMinimized" Color="Color.Primary" Label="Start minimized" />
+                <MudSwitch @bind-Value="_useManual" Color="Color.Primary"
+                           Label="Use a manual pointer chain instead of finding the player automatically" />
+                @if (_useManual)
+                {
+                    <MudText Typo="Typo.body2" Class="mud-text-secondary">
+                        Cheat Engine style chain: [[game.exe + base] + offset1] + ... + last offset → player location (3 doubles).
+                    </MudText>
+                    <MudTextField @bind-Value="_baseOffset" Label="Base offset (hex)" Variant="Variant.Outlined" />
+                    <MudTextField @bind-Value="_offsets" Label="Offsets (hex, comma separated)" Variant="Variant.Outlined"
+                                  HelperText="Example: 0x30, 0x2A0, 0x1A0, 0x128" />
+                }
+                <MudStack Row="true" Justify="Justify.FlexEnd">
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveAsync">Save</MudButton>
+                </MudStack>
+            </MudStack>
+        </MudExpansionPanel>
+    </MudExpansionPanels>
+</MudStack>
+
+@code {
+    // Process, pawn and engine details are for development; release builds show only the status.
+#if DEBUG
+    private static readonly bool ShowDiagnostics = true;
+#else
+    private static readonly bool ShowDiagnostics = false;
+#endif
+
+    private string _processNames = "";
+    private string _baseOffset = "";
+    private string _offsets = "";
+    private int _pollIntervalMs;
+    private int _gameCheckIntervalSeconds;
+    private bool _minimizeToTray;
+    private bool _startMinimized;
+    private bool _useManual;
+    private int _webSocketPort;
+
+    private (string Axis, double? Value)[] Axes =>
+    [
+        ("X", Tracker.Position?.X),
+        ("Y", Tracker.Position?.Y),
+        ("Z", Tracker.Position?.Z),
+    ];
+
+    // Picks the status dot color in app.css.
+    private string StatusTone => Tracker.Status switch
+    {
+        TrackerStatus.Attached => "ok",
+        TrackerStatus.WaitingForGame or TrackerStatus.PointerInvalid => "warn",
+        TrackerStatus.Locating => "info",
+        TrackerStatus.Error => "error",
+        _ => "idle",
+    };
+
+    private string StatusText => Tracker.Status switch
+    {
+        TrackerStatus.Attached => "Tracking",
+        TrackerStatus.WaitingForGame => "Waiting for game",
+        TrackerStatus.Locating => "Locating player",
+        TrackerStatus.PointerInvalid => "No player",
+        TrackerStatus.Error => "Error",
+        _ => "Starting",
+    };
+
+    protected override void OnInitialized()
+    {
+        var s = Settings.Current;
+        _processNames = string.Join(", ", s.ProcessNames);
+        _baseOffset = s.BaseOffset;
+        _offsets = string.Join(", ", s.Offsets);
+        _pollIntervalMs = s.PollIntervalMs;
+        _gameCheckIntervalSeconds = s.GameCheckIntervalSeconds;
+        _minimizeToTray = s.MinimizeToTray;
+        _startMinimized = s.StartMinimized;
+        _useManual = s.UseManualPointerChain;
+        _webSocketPort = s.WebSocketPort;
+        Tracker.Changed += OnStateChanged;
+        Server.Changed += OnStateChanged;
+    }
+
+    private void OnStateChanged() => InvokeAsync(StateHasChanged);
+
+    private async Task SaveAsync()
+    {
+        var offsets = Split(_offsets);
+        var invalid = offsets.Prepend(_baseOffset).FirstOrDefault(o => !TrackerSettings.TryParseHex(o, out _));
+        if (invalid is not null)
+        {
+            Snackbar.Add($"'{invalid}' is not a valid hex value.", Severity.Error);
+            return;
+        }
+
+        Settings.Save(new TrackerSettings
+        {
+            ProcessNames = Split(_processNames),
+            UseManualPointerChain = _useManual,
+            BaseOffset = _baseOffset.Trim(),
+            Offsets = offsets,
+            PollIntervalMs = _pollIntervalMs,
+            GameCheckIntervalSeconds = _gameCheckIntervalSeconds,
+            MinimizeToTray = _minimizeToTray,
+            StartMinimized = _startMinimized,
+            WebSocketPort = _webSocketPort,
+        });
+
+        // Restart so a new mode, interval or process name takes effect. (The map server
+        // restarts itself if the port changed.)
+        await Tracker.RestartAsync();
+        Snackbar.Add("Settings saved.", Severity.Success);
+    }
+
+    private static List<string> Split(string text) =>
+        text.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+
+    public void Dispose()
+    {
+        Tracker.Changed -= OnStateChanged;
+        Server.Changed -= OnStateChanged;
+    }
+}

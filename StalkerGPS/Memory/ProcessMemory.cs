@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 
-namespace StalkerTracker.Memory;
+namespace StalkerGPS.Memory;
 
 /// <summary>
 /// Read-only access to another process's memory via ReadProcessMemory.
@@ -72,16 +72,46 @@ public sealed partial class ProcessMemory : IDisposable
         return ReadProcessMemory(_handle, address, buffer, buffer.Length, out var read) && read == buffer.Length;
     }
 
+    /// <summary>Reads <paramref name="size"/> bytes, or returns null if any part is unreadable.</summary>
+    public byte[]? ReadBytes(nint address, int size)
+    {
+        var buffer = new byte[size];
+        return TryRead(address, buffer) ? buffer : null;
+    }
+
+    public long ReadInt64(nint address) => ReadBytes(address, 8) is { } b ? BitConverter.ToInt64(b) : 0;
+
+    public int ReadInt32(nint address) => ReadBytes(address, 4) is { } b ? BitConverter.ToInt32(b) : 0;
+
+    public nint ReadPointer(nint address) => (nint)ReadInt64(address);
+
     public bool TryReadPointer(nint address, out nint value)
     {
-        var buffer = new byte[8];
-        if (TryRead(address, buffer))
+        value = ReadPointer(address);
+        return value != 0;
+    }
+
+    /// <summary>Lists the main module's PE sections (absolute address, size, characteristics).</summary>
+    public IReadOnlyList<ModuleSection> GetSections()
+    {
+        var header = ReadBytes(ModuleBase, 0x1000);
+        if (header is null)
+            return [];
+
+        int pe = BitConverter.ToInt32(header, 0x3C);
+        int count = BitConverter.ToUInt16(header, pe + 6);
+        int first = pe + 24 + BitConverter.ToUInt16(header, pe + 20);
+        var sections = new List<ModuleSection>(count);
+        for (int i = 0; i < count; i++)
         {
-            value = (nint)BitConverter.ToInt64(buffer);
-            return value != 0;
+            int o = first + i * 40;
+            sections.Add(new ModuleSection(
+                System.Text.Encoding.ASCII.GetString(header, o, 8).TrimEnd('\0'),
+                ModuleBase + BitConverter.ToInt32(header, o + 12),
+                BitConverter.ToInt32(header, o + 8),
+                BitConverter.ToUInt32(header, o + 36)));
         }
-        value = 0;
-        return false;
+        return sections;
     }
 
     /// <summary>

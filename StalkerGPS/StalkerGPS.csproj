@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk.Razor">
+<Project Sdk="Microsoft.NET.Sdk.Razor">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
@@ -7,12 +7,27 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
-    <RootNamespace>StalkerTracker</RootNamespace>
+    <!-- For NotifyIcon (tray icon); WPF has no equivalent. -->
+    <UseWindowsForms>true</UseWindowsForms>
+    <RootNamespace>StalkerGPS</RootNamespace>
     <!-- The game is 64-bit; reading its pointers needs a 64-bit process. -->
     <PlatformTarget>x64</PlatformTarget>
     <!-- Required by the LibraryImport source generator. -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- Copy of the stalker-vodka website's app/favicon.ico. Also used for the window and taskbar. -->
+    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Embedded so the tray icon can load the crisp 16px image rather than shrinking the 32px one. -->
+    <EmbeddedResource Include="Assets\app.ico" LogicalName="StalkerGPS.app.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Avoid WinForms/WPF name clashes (Application, etc.); WinForms types are used fully qualified. -->
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Components.WebView.Wpf" Version="10.0.120" />
