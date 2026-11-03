@@ -1,0 +1,16 @@
+<MudThemeProvider IsDarkMode="true" />
+<MudPopoverProvider />
+<MudDialogProvider />
+<MudSnackbarProvider />
+
+<MudLayout>
+    <MudAppBar Elevation="1" Dense="true">
+        <MudIcon Icon="@Icons.Material.Filled.MyLocation" Class="mr-2" />
+        <MudText Typo="Typo.h6">Stalker 2 Tracker</MudText>
+    </MudAppBar>
+    <MudMainContent>
+        <MudContainer MaxWidth="MaxWidth.Medium" Class="py-4">
+            <Home />
+        </MudContainer>
+    </MudMainContent>
+</MudLayout>
