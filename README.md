@@ -74,8 +74,9 @@ Settings are saved to `%LocalAppData%\StalkerGPS\settings.json`.
 
 - The app only **reads** the game's memory. It never changes anything in the game, and it doesn't
   touch save files.
-- Nothing is sent over the internet. The app accepts connections only from your own PC, and only
-  from the stalker.vodka map page; other websites are refused.
+- Nothing is sent over the internet. The app only downloads the map's public data (the IDs of
+  doors and items) from stalker.vodka. It accepts connections only from your own PC, and only from the stalker.vodka map
+  page; other websites are refused.
 
 ## Building from source
 
@@ -91,15 +92,37 @@ The app runs a WebSocket server at `ws://localhost:41347` (configurable). It acc
 only when the `Origin` header is exactly `https://stalker.vodka` or `http://localhost:3000`
 (development); anything else gets `403 Forbidden`.
 
-Messages are JSON text frames. The current status (and position, if any) is sent right after
-connecting; after that, only changes are sent.
+Messages are JSON text frames. The current status, position, doors, spawns and stashes are sent
+right after connecting; after that, a message is sent when its contents change.
 
 ```json
 {"type":"status","status":"tracking"}
 {"type":"position","x":236349.65,"y":157956.05,"z":1116.08,"yaw":315.59}
+{"type":"doors","doors":[{"guid":"C1CC15FF421A7A4831C77D8833AA4242","locked":false}, ...]}
+{"type":"spawns","spawns":[{"id":"54780EF6447105E25DB460B6D6DF55A9","collected":true}, ...]}
+{"type":"stashes","stashes":[{"guid":"0B3C1AC54E81E76539977992E73A5EF6","marked":true,"looted":false}, ...]}
 ```
 
 - `status` is one of `tracking`, `waitingForGame`, `locating`, `noPlayer`, `error`, `stopped`.
 - `x`, `y`, `z` are game (Unreal Engine) units, in centimeters.
 - `yaw` is the camera heading in degrees, 0 to 360: 0 faces +X and 90 faces +Y (clockwise seen from
   above). It's `null` when unknown.
+- `doors` lists the lock state of the map's doors, keyed by the same `guid` as in the map's lock
+  data (`kind` `"door"`).
+- `spawns` lists whether the map's world spawns (items lying in the world) have been picked up,
+  keyed by the same `id` as the items' `foundAt` entries.
+- `stashes` lists the map's stashes, keyed by the stash's GUID, read from a `guid` (or `id`) field
+  in the map's stash data. `marked` is whether the stash is shown on the player's in-game map: it
+  becomes true once the player learns of it and false again once it's looted. `looted` is whether
+  the stash has been opened and has nothing left in it; a stash opened with items left in it isn't
+  looted.
+- The app downloads the map's data from `assets.stalker.vodka` to know which doors, spawns and
+  stashes to look for (and caches it for offline use), so ones added there are picked up the next
+  time the app starts. Each doors, spawns or stashes message holds the full list, so replace any
+  earlier one. They arrive
+  up to a minute after a save is loaded (the app has to find them first). An empty list means the
+  state is unknown, e.g. the game was closed.
+- The game drops a picked-up spawn from memory when it next starts, so a spawn the game has no
+  record of is reported as collected. The exception is a spawn that only appears through a quest
+  (`spawnedByQuests` isn't empty): it may just not have appeared yet, so it's left out of the list
+  and should be treated as unknown. Doors the game has no record of are left out too.

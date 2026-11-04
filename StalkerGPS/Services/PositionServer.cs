@@ -6,6 +6,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
+using StalkerGPS.Game;
 
 namespace StalkerGPS.Services;
 
@@ -18,8 +19,13 @@ namespace StalkerGPS.Services;
 /// Messages are JSON text frames:
 /// <c>{"type":"status","status":"tracking"}</c> and
 /// <c>{"type":"position","x":..,"y":..,"z":..,"yaw":..}</c> (Unreal units, centimeters; yaw is the
-/// camera heading in degrees, 0 to 360, 0 = +X and 90 = +Y, or null if unknown).
-/// The current status (and position, if any) is sent right after connecting; afterwards only changes are sent.
+/// camera heading in degrees, 0 to 360, 0 = +X and 90 = +Y, or null if unknown),
+/// <c>{"type":"doors","doors":[{"guid":..,"locked":..}, ...]}</c> with every known door,
+/// <c>{"type":"spawns","spawns":[{"id":..,"collected":..}, ...]}</c> with every known world spawn, and
+/// <c>{"type":"stashes","stashes":[{"guid":..,"marked":..,"looted":..}, ...]}</c> with every known stash.
+/// The current state is sent right after connecting; afterwards a message is sent when its contents
+/// change. Doors, spawns and stashes messages always hold the full list, so the latest one is all a
+/// client needs.
 /// </remarks>
 public sealed class PositionServer : IDisposable
 {
@@ -38,6 +44,7 @@ public sealed class PositionServer : IDisposable
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
     private readonly PositionTracker _tracker;
+    private readonly WorldStateTracker _world;
     private readonly SettingsStore _settings;
     private readonly ConcurrentDictionary<Client, byte> _clients = new();
     private readonly Lock _stateLock = new();
@@ -45,6 +52,7 @@ public sealed class PositionServer : IDisposable
     private List<TcpListener> _listeners = [];
     private string? _lastStatus;
     private string? _lastPosition;
+    private readonly string?[] _lastWorld = new string?[Enum.GetValues<RecordKind>().Length];
 
     /// <summary>The port being listened on, or null if the server isn't running.</summary>
     public int? Port { get; private set; }
@@ -57,11 +65,13 @@ public sealed class PositionServer : IDisposable
     /// <summary>Raised when the server starts, stops, fails, or a client connects or disconnects.</summary>
     public event Action? Changed;
 
-    public PositionServer(PositionTracker tracker, SettingsStore settings)
+    public PositionServer(PositionTracker tracker, WorldStateTracker world, SettingsStore settings)
     {
         _tracker = tracker;
+        _world = world;
         _settings = settings;
         _tracker.Changed += OnTrackerChanged;
+        _world.KindChanged += OnWorldChanged;
     }
 
     public void Start()
@@ -172,6 +182,11 @@ public sealed class PositionServer : IDisposable
                 client.Enqueue(_lastStatus ?? StatusMessage(_tracker.Status));
                 if (_lastPosition is not null)
                     client.Enqueue(_lastPosition);
+                foreach (var kind in Enum.GetValues<RecordKind>())
+                {
+                    if (_lastWorld[(int)kind] is { } latest)
+                        client.SetLatest(kind, latest);
+                }
             }
             await client.RunAsync(ct);
         }
@@ -291,6 +306,20 @@ public sealed class PositionServer : IDisposable
                 client.Enqueue(message);
     }
 
+    private void OnWorldChanged(RecordKind kind)
+    {
+        var message = kind switch
+        {
+            RecordKind.Door => JsonSerializer.Serialize(new DoorsMessage("doors", [.. _world.Doors.Select(kv => new DoorEntry(kv.Key, kv.Value.HasFlag(ObjectState.Locked)))]), JsonOptions),
+            RecordKind.Spawn => JsonSerializer.Serialize(new SpawnsMessage("spawns", [.. _world.Spawns.Select(kv => new SpawnEntry(kv.Key, kv.Value.HasFlag(ObjectState.Collected)))]), JsonOptions),
+            _ => JsonSerializer.Serialize(new StashesMessage("stashes", [.. _world.Stashes.Select(kv => new StashEntry(kv.Key, kv.Value.HasFlag(ObjectState.Marked), kv.Value.HasFlag(ObjectState.Looted)))]), JsonOptions),
+        };
+        lock (_stateLock)
+            _lastWorld[(int)kind] = message;
+        foreach (var client in _clients.Keys)
+            client.SetLatest(kind, message);
+    }
+
     private static string StatusMessage(TrackerStatus status) =>
         JsonSerializer.Serialize(new StatusMessageBody("status", status switch
         {
@@ -305,12 +334,25 @@ public sealed class PositionServer : IDisposable
     public void Dispose()
     {
         _tracker.Changed -= OnTrackerChanged;
+        _world.KindChanged -= OnWorldChanged;
         Stop();
     }
 
     private sealed record StatusMessageBody(string Type, string Status);
 
     private sealed record PositionMessage(string Type, double X, double Y, double Z, double? Yaw);
+
+    private sealed record DoorsMessage(string Type, IReadOnlyList<DoorEntry> Doors);
+
+    private sealed record DoorEntry(string Guid, bool Locked);
+
+    private sealed record SpawnsMessage(string Type, IReadOnlyList<SpawnEntry> Spawns);
+
+    private sealed record SpawnEntry(string Id, bool Collected);
+
+    private sealed record StashesMessage(string Type, IReadOnlyList<StashEntry> Stashes);
+
+    private sealed record StashEntry(string Guid, bool Marked, bool Looted);
 
     /// <summary>One connected browser. Sends are queued so a slow client never blocks the tracker.</summary>
     private sealed class Client(WebSocket socket)
@@ -319,7 +361,18 @@ public sealed class PositionServer : IDisposable
         private readonly Channel<string> _outgoing = Channel.CreateBounded<string>(
             new BoundedChannelOptions(16) { FullMode = BoundedChannelFullMode.DropOldest, SingleReader = true });
 
+        // The latest doors, spawns and stashes messages wait here instead of in the queue, where they
+        // could be dropped; each holds a full list, so only the newest of each kind matters.
+        private readonly string?[] _pending = new string?[Enum.GetValues<RecordKind>().Length];
+        private static readonly string PendingSignal = new("pending".AsSpan());
+
         public void Enqueue(string message) => _outgoing.Writer.TryWrite(message);
+
+        public void SetLatest(RecordKind kind, string message)
+        {
+            Volatile.Write(ref _pending[(int)kind], message);
+            _outgoing.Writer.TryWrite(PendingSignal);
+        }
 
         public async Task RunAsync(CancellationToken ct)
         {
@@ -327,11 +380,18 @@ public sealed class PositionServer : IDisposable
             var receive = ReceiveAsync(linked.Token);
             try
             {
-                await foreach (var message in _outgoing.Reader.ReadAllAsync(linked.Token))
+                await foreach (var queued in _outgoing.Reader.ReadAllAsync(linked.Token))
                 {
                     if (socket.State != WebSocketState.Open)
                         break;
-                    await socket.SendAsync(Encoding.UTF8.GetBytes(message), WebSocketMessageType.Text, true, linked.Token);
+                    if (!ReferenceEquals(queued, PendingSignal))
+                        await socket.SendAsync(Encoding.UTF8.GetBytes(queued), WebSocketMessageType.Text, true, linked.Token);
+                    // Checked after every message, so these still go out if their signal was dropped.
+                    for (int i = 0; i < _pending.Length; i++)
+                    {
+                        if (Interlocked.Exchange(ref _pending[i], null) is { } latest)
+                            await socket.SendAsync(Encoding.UTF8.GetBytes(latest), WebSocketMessageType.Text, true, linked.Token);
+                    }
                 }
             }
             catch (Exception) when (linked.IsCancellationRequested || socket.State != WebSocketState.Open)

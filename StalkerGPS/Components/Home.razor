@@ -1,6 +1,7 @@
 @implements IDisposable
 @inject PositionTracker Tracker
 @inject PositionServer Server
+@inject WorldStateTracker World
 @inject SettingsStore Settings
 @inject ISnackbar Snackbar
 
@@ -32,6 +33,8 @@
                 <p class="sv-meta">Map server ws://localhost:@port · @Server.ClientCount connected</p>
             }
         }
+        @* Shown in every build: finding doors and items takes a minute, and the map is incomplete until then. *@
+        <p class="sv-copy">@WorldStatusText</p>
         @* Shown in every build: without the server the map can't receive positions. *@
         @if (Server.Error is { } serverError)
         {
@@ -118,6 +121,11 @@
         _ => "idle",
     };
 
+    private string WorldStatusText => World.Message
+        ?? $"Doors and items loaded: {World.Doors.Count:N0} doors ({World.Doors.Values.Count(s => s.HasFlag(ObjectState.Locked)):N0} locked) · "
+            + $"{World.Spawns.Count:N0} items ({World.Spawns.Values.Count(s => s.HasFlag(ObjectState.Collected)):N0} picked up) · "
+            + $"{World.Stashes.Count:N0} stashes ({World.Stashes.Values.Count(s => s.HasFlag(ObjectState.Marked)):N0} on your map, {World.Stashes.Values.Count(s => s.HasFlag(ObjectState.Looted)):N0} looted)";
+
     private string StatusText => Tracker.Status switch
     {
         TrackerStatus.Attached => "Tracking",
@@ -142,6 +150,7 @@
         _webSocketPort = s.WebSocketPort;
         Tracker.Changed += OnStateChanged;
         Server.Changed += OnStateChanged;
+        World.Changed += OnStateChanged;
     }
 
     private void OnStateChanged() => InvokeAsync(StateHasChanged);
@@ -182,5 +191,6 @@
     {
         Tracker.Changed -= OnStateChanged;
         Server.Changed -= OnStateChanged;
+        World.Changed -= OnStateChanged;
     }
 }

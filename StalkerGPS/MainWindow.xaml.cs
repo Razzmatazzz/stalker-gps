@@ -23,6 +23,7 @@ public partial class MainWindow : Window
         services.AddMudServices();
         services.AddSingleton<SettingsStore>();
         services.AddSingleton<PositionTracker>();
+        services.AddSingleton<WorldStateTracker>();
         services.AddSingleton<PositionServer>();
 
         _services = services.BuildServiceProvider();
@@ -41,6 +42,7 @@ public partial class MainWindow : Window
 
         // Tracking and the map server run for the app's whole lifetime; tracking waits for the game on its own.
         _services.GetRequiredService<PositionTracker>().Start();
+        _services.GetRequiredService<WorldStateTracker>().Start();
         _services.GetRequiredService<PositionServer>().Start();
     }
 

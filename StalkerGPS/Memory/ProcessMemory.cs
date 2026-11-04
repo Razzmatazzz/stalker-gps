@@ -9,19 +9,29 @@ namespace StalkerGPS.Memory;
 public sealed partial class ProcessMemory : IDisposable
 {
     private const uint ProcessVmRead = 0x0010;
+    private const uint ProcessQueryInformation = 0x0400; // needed by VirtualQueryEx
     private const uint ProcessQueryLimitedInformation = 0x1000;
+
+    private const uint MemCommit = 0x1000;
+    private const uint PageGuard = 0x100;
+    private const uint PageWritable = 0x04 | 0x08 | 0x40 | 0x80; // RW, WriteCopy, Execute-RW, Execute-WriteCopy
 
     private nint _handle;
 
     public Process Process { get; }
     public nint ModuleBase { get; }
+    public long ModuleSize { get; }
 
-    private ProcessMemory(Process process, nint handle, nint moduleBase)
+    private ProcessMemory(Process process, nint handle, nint moduleBase, long moduleSize)
     {
         Process = process;
         _handle = handle;
         ModuleBase = moduleBase;
+        ModuleSize = moduleSize;
     }
+
+    /// <summary>Whether <paramref name="address"/> is inside the game's own module (its code and static data).</summary>
+    public bool IsInModule(long address) => address >= ModuleBase && address < ModuleBase + ModuleSize;
 
     /// <summary>Opens the first running process matching one of <paramref name="processNames"/> (without ".exe").</summary>
     public static ProcessMemory? TryOpen(IEnumerable<string> processNames, out string? error)
@@ -36,7 +46,7 @@ public sealed partial class ProcessMemory : IDisposable
             return null;
         }
 
-        var handle = OpenProcess(ProcessVmRead | ProcessQueryLimitedInformation, false, process.Id);
+        var handle = OpenProcess(ProcessVmRead | ProcessQueryInformation | ProcessQueryLimitedInformation, false, process.Id);
         if (handle == 0)
         {
             error = $"OpenProcess failed (Win32 error {Marshal.GetLastPInvokeError()}). Try running as administrator.";
@@ -44,9 +54,11 @@ public sealed partial class ProcessMemory : IDisposable
         }
 
         nint moduleBase;
+        long moduleSize;
         try
         {
             moduleBase = process.MainModule?.BaseAddress ?? 0;
+            moduleSize = process.MainModule?.ModuleMemorySize ?? 0;
         }
         catch (Exception ex)
         {
@@ -55,7 +67,7 @@ public sealed partial class ProcessMemory : IDisposable
             return null;
         }
 
-        return new ProcessMemory(process, handle, moduleBase);
+        return new ProcessMemory(process, handle, moduleBase, moduleSize);
     }
 
     public bool HasExited
@@ -70,6 +82,12 @@ public sealed partial class ProcessMemory : IDisposable
     public bool TryRead(nint address, byte[] buffer)
     {
         return ReadProcessMemory(_handle, address, buffer, buffer.Length, out var read) && read == buffer.Length;
+    }
+
+    public unsafe bool TryRead(nint address, Span<byte> buffer)
+    {
+        fixed (byte* p = buffer)
+            return ReadProcessMemory(_handle, address, p, buffer.Length, out var read) && read == buffer.Length;
     }
 
     /// <summary>Reads <paramref name="size"/> bytes, or returns null if any part is unreadable.</summary>
@@ -112,6 +130,22 @@ public sealed partial class ProcessMemory : IDisposable
                 BitConverter.ToUInt32(header, o + 36)));
         }
         return sections;
+    }
+
+    /// <summary>Lists the process's committed, writable memory (the heap, where game state lives).</summary>
+    public List<MemoryRegion> GetWritableRegions()
+    {
+        var regions = new List<MemoryRegion>();
+        nint address = 0;
+        while (VirtualQueryEx(_handle, address, out var info, Marshal.SizeOf<MemoryBasicInformation>()) != 0)
+        {
+            address = info.BaseAddress + info.RegionSize;
+            if (info.State == MemCommit && (info.Protect & PageGuard) == 0 && (info.Protect & PageWritable) != 0)
+                regions.Add(new MemoryRegion(info.BaseAddress, (long)info.RegionSize, info.AllocationBase));
+            if (address <= info.BaseAddress)
+                break;
+        }
+        return regions;
     }
 
     /// <summary>
@@ -166,5 +200,27 @@ public sealed partial class ProcessMemory : IDisposable
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
+    private static unsafe partial bool ReadProcessMemory(nint process, nint baseAddress, byte* buffer, nint size, out nint bytesRead);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool CloseHandle(nint handle);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    private static partial nint VirtualQueryEx(nint process, nint address, out MemoryBasicInformation info, nint length);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MemoryBasicInformation
+    {
+        public nint BaseAddress;
+        public nint AllocationBase;
+        public uint AllocationProtect;
+        public nint RegionSize;
+        public uint State;
+        public uint Protect;
+        public uint Type;
+    }
 }
+
+/// <summary>A block of committed memory; <see cref="AllocationBase"/> groups the blocks of one allocation.</summary>
+public readonly record struct MemoryRegion(nint Address, long Size, nint AllocationBase);
