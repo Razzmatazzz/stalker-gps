@@ -6,8 +6,9 @@ namespace StalkerGPS.Services;
 /// <summary>
 /// Background loop that tracks the state of the map's objects while the player is in the world:
 /// whether each door is locked, whether each world spawn has been picked up, and whether each
-/// stash is marked on the in-game map. Finds their records once (a heap scan of up to a minute,
-/// see <see cref="WorldRecords"/>), then re-reads them every couple of seconds and reports changes.
+/// stash is marked on the in-game map or looted. Finds their records (by walking the game's record
+/// pools, or a heap search of a minute or two if that fails; see <see cref="WorldRecords"/>), then
+/// re-reads them every couple of seconds and reports changes.
 /// Raises <see cref="KindChanged"/> and <see cref="Changed"/> from a background thread.
 /// </summary>
 /// <remarks>
@@ -19,6 +20,10 @@ public sealed class WorldStateTracker : IDisposable
 {
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan RetryInterval = TimeSpan.FromSeconds(30);
+
+    // Walking the pools is cheap, so it's redone now and then to pick up records the game adds
+    // later (e.g. quest rewards). The full heap search is only redone when records go missing.
+    private static readonly TimeSpan PoolRefreshInterval = TimeSpan.FromSeconds(30);
 
     // Spawns without a record only count as collected if the scan found at least this share of
     // the map's spawns; fewer means the scan missed them (e.g. mid-load), not that they're gone.
@@ -74,6 +79,8 @@ public sealed class WorldStateTracker : IDisposable
         List<WorldRecord> records = [];
         HashSet<nint>? allocations = null;
         var ids = MapData.Empty;
+        bool fromPools = false;
+        var lastScan = DateTime.MinValue;
         try
         {
             while (true)
@@ -109,7 +116,8 @@ public sealed class WorldStateTracker : IDisposable
                         }
                         if (records.Count == 0 && !ids.IsEmpty)
                         {
-                            records = Scan(game, ids, ref allocations, ct);
+                            records = Scan(game, ids, ref allocations, out fromPools, ct);
+                            lastScan = DateTime.UtcNow;
                             if (records.Count == 0)
                             {
                                 SetMessage("Nothing found yet. Retrying...");
@@ -123,6 +131,12 @@ public sealed class WorldStateTracker : IDisposable
                         }
                         else if (records.Count > 0)
                         {
+                            if (fromPools && DateTime.UtcNow - lastScan > PoolRefreshInterval
+                                && WorldRecords.ScanPools(game, ids.DoorGuids, ids.SpawnIds, ids.StashGuids) is { Count: > 0 } refreshed)
+                            {
+                                records = refreshed;
+                                lastScan = DateTime.UtcNow;
+                            }
                             var states = ReadAll(game, records, ids, out int missing);
                             // Many records gone means the game rebuilt them (e.g. another save was
                             // loaded); find them again. A few can come and go with DLC levels.
@@ -151,9 +165,20 @@ public sealed class WorldStateTracker : IDisposable
         }
     }
 
-    /// <summary>Scans where records were last time first, then the whole heap if that comes up short.</summary>
-    private List<WorldRecord> Scan(ProcessMemory memory, MapData ids, ref HashSet<nint>? allocations, CancellationToken ct)
+    /// <summary>
+    /// Walks the game's record pools, which takes milliseconds. If they can't be found (e.g. a patch
+    /// changed their layout), searches where records were last time, then the whole heap.
+    /// </summary>
+    private List<WorldRecord> Scan(ProcessMemory memory, MapData ids, ref HashSet<nint>? allocations, out bool fromPools, CancellationToken ct)
     {
+        if (WorldRecords.ScanPools(memory, ids.DoorGuids, ids.SpawnIds, ids.StashGuids) is { Count: > 0 } pooled)
+        {
+            fromPools = true;
+            _recordCount = pooled.Count;
+            return pooled;
+        }
+
+        fromPools = false;
         SetMessage("Finding doors and items...");
         // Spawns without a record are reported as collected, so a scan that misses records would
         // report them wrongly: anything short of last time's count gets a full scan.

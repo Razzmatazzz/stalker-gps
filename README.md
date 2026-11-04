@@ -120,7 +120,8 @@ right after connecting; after that, a message is sent when its contents change.
   stashes to look for (and caches it for offline use), so ones added there are picked up the next
   time the app starts. Each doors, spawns or stashes message holds the full list, so replace any
   earlier one. They arrive
-  up to a minute after a save is loaded (the app has to find them first). An empty list means the
+  a few seconds after a save is loaded (or a minute or two if a game update has changed how the
+  game stores them and the app has to search its memory instead). An empty list means the
   state is unknown, e.g. the game was closed.
 - The game drops a picked-up spawn from memory when it next starts, so a spawn the game has no
   record of is reported as collected. The exception is a spawn that only appears through a quest
