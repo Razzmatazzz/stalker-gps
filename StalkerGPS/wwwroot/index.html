@@ -11,13 +11,21 @@
     <link href="StalkerGPS.styles.css" rel="stylesheet" />
 </head>
 <body>
-    <div id="app">Loading...</div>
+    <div id="app"></div>
 
     <div id="blazor-error-ui" style="display:none">
-        An unhandled error has occurred.
+        <span id="blazor-error-text">An unhandled error has occurred.</span>
         <a href="" class="reload">Reload</a>
     </div>
 
+    <script>
+        window.svSetLanguage = (lang, dir, errorText, reloadText) => {
+            document.documentElement.lang = lang;
+            document.documentElement.dir = dir;
+            document.getElementById("blazor-error-text").textContent = errorText;
+            document.querySelector("#blazor-error-ui .reload").textContent = reloadText;
+        };
+    </script>
     <script src="_framework/blazor.webview.js"></script>
     <script src="_content/MudBlazor/MudBlazor.min.js"></script>
 </body>

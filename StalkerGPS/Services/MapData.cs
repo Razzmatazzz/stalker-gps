@@ -14,7 +14,8 @@ public sealed record MapData(IReadOnlyList<string> DoorGuids, IReadOnlyList<stri
     IReadOnlyList<string> StashGuids)
 {
     private const string DataUrl = "https://assets.stalker.vodka/data/";
-    private static readonly string[] ItemFiles = ["weapons", "armor", "artifacts", "attachments", "keys"];
+    // Keys are in "items", as they are for the website; "keys.json" is an old file that is no longer updated.
+    private static readonly string[] ItemFiles = ["weapons", "armor", "artifacts", "attachments", "items"];
     private static readonly TimeSpan DownloadTimeout = TimeSpan.FromSeconds(30);
 
     private static readonly string CachePath = Path.Combine(

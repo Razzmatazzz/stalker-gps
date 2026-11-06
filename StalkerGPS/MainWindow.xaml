@@ -63,9 +63,9 @@
         </blazor:BlazorWebView>
 
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top">
-            <Button Style="{StaticResource CaptionButton}" Content="&#xE921;" ToolTip="Minimize" Click="OnMinimizeClick" />
-            <Button x:Name="MaximizeButton" Style="{StaticResource CaptionButton}" Content="&#xE922;" ToolTip="Maximize" Click="OnMaximizeClick" />
-            <Button Style="{StaticResource CloseButton}" Content="&#xE8BB;" ToolTip="Close" Click="OnCloseClick" />
+            <Button x:Name="MinimizeButton" Style="{StaticResource CaptionButton}" Content="&#xE921;" Click="OnMinimizeClick" />
+            <Button x:Name="MaximizeButton" Style="{StaticResource CaptionButton}" Content="&#xE922;" Click="OnMaximizeClick" />
+            <Button x:Name="CloseWindowButton" Style="{StaticResource CloseButton}" Content="&#xE8BB;" Click="OnCloseClick" />
         </StackPanel>
     </Grid>
 </Window>

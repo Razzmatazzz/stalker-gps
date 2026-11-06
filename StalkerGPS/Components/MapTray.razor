@@ -1,0 +1,74 @@
+@implements IDisposable
+@inject PositionServer Server
+@inject SettingsStore Settings
+@inject Localizer L
+
+@* The map's controls, beside the app while the overlay is on. The page owns the list, so new controls appear here without an app update. *@
+<aside class="sv-tray @(Compact ? "sv-tray-compact" : null)">
+    <div class="sv-tray-header">
+        <h2 class="sv-tray-title">@T.MapControlsTitle</h2>
+        <MudIconButton Icon="@(Compact ? Icons.Material.Filled.OpenInFull : Icons.Material.Filled.CloseFullscreen)" Size="Size.Small"
+                       title="@ToggleLabel" aria-label="@ToggleLabel" OnClick="ToggleCompact" />
+    </div>
+    @if (Server.MapControls is { } map)
+    {
+        string? group = null;
+        <MudStack Spacing="1">
+            @foreach (var control in map.Controls)
+            {
+                @if (control.Group is not null && control.Group != group)
+                {
+                    group = control.Group;
+                    <span class="sv-label sv-control-group">@group</span>
+                }
+                <div class="@(control.Parent is null ? null : "sv-control-child")">
+                    @switch (control.Kind)
+                    {
+                        case MapControlKind.Toggle:
+                            <MudSwitch T="bool" Value="control.IsOn == true" ValueChanged="@(on => Server.SendMapCommand(control.Id, on))"
+                                       Disabled="!control.Enabled" Color="Color.Primary" Label="@control.Label" />
+                            break;
+                        case MapControlKind.Range:
+                            <MudSlider T="double" Value="control.Number ?? control.Min" ValueChanged="@(value => Server.SendMapCommand(control.Id, value))"
+                                       Min="control.Min" Max="control.Max" Step="control.Step" Immediate="false"
+                                       Disabled="!control.Enabled" Color="Color.Primary">@control.Label</MudSlider>
+                            break;
+                        case MapControlKind.Action:
+                            <MudButton Variant="Variant.Outlined" Color="Color.Primary" Disabled="!control.Enabled"
+                                       OnClick="@(() => Server.SendMapCommand(control.Id))">@control.Label</MudButton>
+                            break;
+                    }
+                </div>
+            }
+        </MudStack>
+    }
+    else
+    {
+        <p class="sv-copy">@T.MapControlsWaiting</p>
+    }
+</aside>
+
+@code {
+    [Parameter]
+    public bool Compact { get; set; }
+
+    private Strings T => L.T;
+
+    private string ToggleLabel => Compact ? T.TrayShowApp : T.TrayShowControlsOnly;
+
+    protected override void OnInitialized()
+    {
+        Server.Changed += OnStateChanged;
+        L.Changed += OnStateChanged;
+    }
+
+    private void OnStateChanged() => InvokeAsync(StateHasChanged);
+
+    private void ToggleCompact() => Settings.Update(s => s.TrayCompact = !Compact);
+
+    public void Dispose()
+    {
+        Server.Changed -= OnStateChanged;
+        L.Changed -= OnStateChanged;
+    }
+}

@@ -1,7 +1,9 @@
 using System.IO;
 using System.Windows;
+using System.Windows.Interop;
 using Microsoft.Extensions.DependencyInjection;
 using MudBlazor.Services;
+using StalkerGPS.Localization;
 using StalkerGPS.Services;
 using Forms = System.Windows.Forms;
 
@@ -10,8 +12,19 @@ namespace StalkerGPS;
 public partial class MainWindow : Window
 {
     private readonly ServiceProvider _services;
+    // Keep in step with .sv-shell-tray in app.css.
+    private const double TrayWidth = 300;
+    private const double AppMinWidth = 480;
+
     private readonly SettingsStore _settings;
+    private readonly Localizer _localizer;
+    private readonly Forms.ToolStripMenuItem _trayShow = new();
+    private readonly Forms.ToolStripMenuItem _trayExit = new();
     private readonly Forms.NotifyIcon _trayIcon;
+    private OverlayWindow? _overlay;
+    private bool _trayOpen;
+    private bool _compact;
+    private double _appWidth;
 
     public MainWindow()
     {
@@ -22,9 +35,11 @@ public partial class MainWindow : Window
 #endif
         services.AddMudServices();
         services.AddSingleton<SettingsStore>();
+        services.AddSingleton<Localizer>();
         services.AddSingleton<PositionTracker>();
         services.AddSingleton<WorldStateTracker>();
         services.AddSingleton<PositionServer>();
+        services.AddSingleton<MapControlMemory>();
 
         _services = services.BuildServiceProvider();
         Resources.Add("services", _services);
@@ -35,15 +50,23 @@ public partial class MainWindow : Window
         _settings = _services.GetRequiredService<SettingsStore>();
         _settings.Saved += () => Dispatcher.Invoke(OnSettingsSaved);
         _trayIcon = CreateTrayIcon();
+        _localizer = _services.GetRequiredService<Localizer>();
+        _localizer.Changed += () => Dispatcher.Invoke(ApplyLanguage);
+        ApplyLanguage();
         ApplyTraySetting();
+        ApplyMapTraySetting();
 
         if (_settings.Current.StartMinimized)
             StartMinimized();
+        else
+            SourceInitialized += (_, _) => ApplySavedPosition();
 
         // Tracking and the map server run for the app's whole lifetime; tracking waits for the game on its own.
         _services.GetRequiredService<PositionTracker>().Start();
         _services.GetRequiredService<WorldStateTracker>().Start();
+        _services.GetRequiredService<MapControlMemory>();
         _services.GetRequiredService<PositionServer>().Start();
+        ApplyOverlaySetting();
     }
 
     private void OnSettingsSaved()
@@ -52,6 +75,96 @@ public partial class MainWindow : Window
         var server = _services.GetRequiredService<PositionServer>();
         if (server.Port != _settings.Current.WebSocketPort)
             server.Start();
+        ApplyOverlaySetting();
+        ApplyMapTraySetting();
+    }
+
+    /// <summary>
+    /// Sizes the window for the map controls tray: wider while it's out, and only as wide as the tray
+    /// when it's the only thing showing. Going to and from that keeps the tray where it is on screen.
+    /// </summary>
+    private void ApplyMapTraySetting()
+    {
+        bool tray = _settings.Current.OverlayEnabled;
+        bool compact = tray && _settings.Current.TrayCompact;
+        if (tray == _trayOpen && compact == _compact)
+            return;
+
+        // The tray is laid out for its own width, so it can't share a maximized window's sizing.
+        if (compact && WindowState == WindowState.Maximized)
+            WindowState = WindowState.Normal;
+
+        // Read first: resizing can move the window's center onto another monitor.
+        var area = CurrentWorkArea();
+        double oldWidth = Width;
+        double appWidth = _compact ? _appWidth : Width - (_trayOpen ? TrayWidth : 0);
+        bool compactChanged = compact != _compact;
+        _appWidth = appWidth;
+        _trayOpen = tray;
+        _compact = compact;
+        MinWidth = compact ? TrayWidth : AppMinWidth + (tray ? TrayWidth : 0);
+        Width = compact ? TrayWidth : appWidth + (tray ? TrayWidth : 0);
+
+        // Not placed on screen yet at startup.
+        if (double.IsNaN(Left))
+            return;
+        if (compactChanged)
+            Left += oldWidth - Width;
+        Left = Math.Max(area.Left, Math.Min(Left, area.Right - Width));
+    }
+
+    /// <summary>The usable part of the monitor the window is on, in the units of Left and Width.</summary>
+    private Rect CurrentWorkArea() =>
+        PresentationSource.FromVisual(this)?.CompositionTarget is null
+            ? SystemParameters.WorkArea
+            : WorkArea(Forms.Screen.FromHandle(new WindowInteropHelper(this).Handle));
+
+    private Rect WorkArea(Forms.Screen screen)
+    {
+        var area = screen.WorkingArea;
+        var fromDevice = PresentationSource.FromVisual(this).CompositionTarget.TransformFromDevice;
+        return new Rect(
+            fromDevice.Transform(new Point(area.Left, area.Top)),
+            fromDevice.Transform(new Point(area.Right, area.Bottom)));
+    }
+
+    /// <summary>
+    /// Puts the window back where it last closed. If that monitor has gone or moved, the title bar
+    /// would not be on any screen, so the window stays where Windows placed it.
+    /// </summary>
+    private void ApplySavedPosition()
+    {
+        if (_settings.Current.WindowLeft is not { } left || _settings.Current.WindowTop is not { } top)
+            return;
+
+        var titleBar = new Point(left + Width / 2, top + 16);
+        var screens = Forms.Screen.AllScreens.Select(WorkArea).ToList();
+        int index = screens.FindIndex(s => s.Contains(titleBar));
+        if (index >= 0)
+        {
+            var area = screens[index];
+            Left = Math.Max(area.Left, Math.Min(left, area.Right - Width));
+            Top = Math.Max(area.Top, Math.Min(top, area.Bottom - Height));
+        }
+    }
+
+    private void ApplyOverlaySetting()
+    {
+        if (_settings.Current.OverlayEnabled && _overlay is null)
+        {
+            _overlay = new OverlayWindow(_settings, _localizer, _services.GetRequiredService<PositionServer>());
+            _overlay.Show();
+        }
+        else if (!_settings.Current.OverlayEnabled && _overlay is not null)
+        {
+            // Closed rather than hidden: the map takes a lot of memory.
+            _overlay.Close();
+            _overlay = null;
+        }
+        else
+        {
+            _overlay?.ApplySettings();
+        }
     }
 
     /// <summary>
@@ -75,6 +188,7 @@ public partial class MainWindow : Window
             var area = SystemParameters.WorkArea;
             Left = area.Left + (area.Width - Width) / 2;
             Top = area.Top + (area.Height - Height) / 2;
+            ApplySavedPosition();
             ShowInTaskbar = true;
         }
     }
@@ -82,8 +196,10 @@ public partial class MainWindow : Window
     private Forms.NotifyIcon CreateTrayIcon()
     {
         var menu = new Forms.ContextMenuStrip();
-        menu.Items.Add("Show", null, (_, _) => RestoreFromTray());
-        menu.Items.Add("Exit", null, (_, _) => Close());
+        _trayShow.Click += (_, _) => RestoreFromTray();
+        _trayExit.Click += (_, _) => Close();
+        menu.Items.Add(_trayShow);
+        menu.Items.Add(_trayExit);
 
         var icon = new Forms.NotifyIcon
         {
@@ -123,6 +239,26 @@ public partial class MainWindow : Window
         return System.Drawing.Icon.FromHandle(scaled.GetHicon());
     }
 
+    /// <summary>The text outside the web view. The title is the app's name, so it isn't translated.</summary>
+    private void ApplyLanguage()
+    {
+        var text = _localizer.T;
+        MinimizeButton.ToolTip = text.Minimize;
+        CloseWindowButton.ToolTip = text.Close;
+        UpdateMaximizeButton();
+        _trayShow.Text = text.TrayShow;
+        _trayExit.Text = text.TrayExit;
+        _trayIcon.ContextMenuStrip!.RightToLeft = _localizer.IsRightToLeft ? Forms.RightToLeft.Yes : Forms.RightToLeft.No;
+        _overlay?.ApplySettings();
+    }
+
+    private void UpdateMaximizeButton()
+    {
+        bool maximized = WindowState == WindowState.Maximized;
+        MaximizeButton.Content = maximized ? "" : "";
+        MaximizeButton.ToolTip = maximized ? _localizer.T.Restore : _localizer.T.Maximize;
+    }
+
     private void ApplyTraySetting()
     {
         _trayIcon.Visible = _settings.Current.MinimizeToTray;
@@ -136,12 +272,10 @@ public partial class MainWindow : Window
         base.OnStateChanged(e);
         HideToTrayIfEnabled();
 
-        bool maximized = WindowState == WindowState.Maximized;
-        MaximizeButton.Content = maximized ? "" : "";
-        MaximizeButton.ToolTip = maximized ? "Restore" : "Maximize";
+        UpdateMaximizeButton();
         // Without a native frame, a maximized window extends past the screen edge by the
         // resize border; pad the content so nothing is cut off.
-        Root.Margin = maximized ? TitleBar.MaximizedFrameThickness() : new Thickness(0);
+        Root.Margin = WindowState == WindowState.Maximized ? TitleBar.MaximizedFrameThickness() : new Thickness(0);
     }
 
     private void OnMinimizeClick(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
@@ -164,8 +298,19 @@ public partial class MainWindow : Window
         Activate();
     }
 
+    // Not in OnClosed: RestoreBounds is empty by then.
+    protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
+    {
+        var position = WindowState == WindowState.Normal ? new Rect(Left, Top, Width, Height) : RestoreBounds;
+        // A window that started minimized and closed before it rendered has no real position yet.
+        if (!position.IsEmpty && position.Left > -32000)
+            _settings.RememberWindowPosition(position.Left, position.Top);
+        base.OnClosing(e);
+    }
+
     protected override void OnClosed(EventArgs e)
     {
+        _overlay?.Close();
         _trayIcon.Visible = false;
         _trayIcon.Dispose();
         _services.Dispose();

@@ -1,4 +1,5 @@
 using StalkerGPS.Game;
+using StalkerGPS.Localization;
 using StalkerGPS.Memory;
 
 namespace StalkerGPS.Services;
@@ -31,6 +32,8 @@ public sealed class WorldStateTracker : IDisposable
 
     private static readonly RecordKind[] Kinds = Enum.GetValues<RecordKind>();
 
+    private static readonly Func<Strings, string> WaitingForPlayer = s => s.WorldWaitingForPlayer;
+
     private readonly SettingsStore _settings;
     private readonly PositionTracker _tracker;
     private CancellationTokenSource? _cts;
@@ -47,8 +50,8 @@ public sealed class WorldStateTracker : IDisposable
     /// <summary>Each stash found (<see cref="ObjectState.Marked"/>, <see cref="ObjectState.Looted"/>), by GUID.</summary>
     public IReadOnlyDictionary<string, ObjectState> Stashes => _states[(int)RecordKind.Stash];
 
-    /// <summary>What the tracker is doing or why it has nothing, for display.</summary>
-    public string? Message { get; private set; }
+    /// <summary>What the tracker is doing or why it has nothing, for display in the current language.</summary>
+    public Func<Strings, string>? Message { get; private set; }
 
     /// <summary>
     /// Raised when the states of one kind change: after a scan, or when a door is locked or
@@ -100,17 +103,17 @@ public sealed class WorldStateTracker : IDisposable
                     // Records only exist once a save is loaded, i.e. when there's a player.
                     if (_tracker.Status != TrackerStatus.Attached)
                     {
-                        SetMessage(records.Count == 0 ? "Waiting for the player." : null);
+                        SetMessage(records.Count == 0 ? WaitingForPlayer : null);
                     }
                     else if ((memory ??= ProcessMemory.TryOpen(_settings.Current.ProcessNames, out _)) is { } game)
                     {
                         if (records.Count == 0 && ids.IsEmpty)
                         {
-                            SetMessage("Downloading the map's data...");
+                            SetMessage(s => s.WorldDownloading);
                             ids = await MapData.LoadAsync(ct);
                             if (ids.IsEmpty)
                             {
-                                SetMessage("Couldn't download the map's data. Retrying...");
+                                SetMessage(s => s.WorldDownloadFailed);
                                 delay = RetryInterval;
                             }
                         }
@@ -120,7 +123,7 @@ public sealed class WorldStateTracker : IDisposable
                             lastScan = DateTime.UtcNow;
                             if (records.Count == 0)
                             {
-                                SetMessage("Nothing found yet. Retrying...");
+                                SetMessage(s => s.WorldNothingFound);
                                 delay = RetryInterval;
                             }
                             else
@@ -150,7 +153,7 @@ public sealed class WorldStateTracker : IDisposable
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     records = [];
-                    SetMessage($"Tracking doors and items failed: {ex.Message} Retrying...");
+                    SetMessage(s => string.Format(s.WorldFailed, ex.Message));
                     delay = RetryInterval;
                 }
                 await Task.Delay(delay, ct);
@@ -179,7 +182,7 @@ public sealed class WorldStateTracker : IDisposable
         }
 
         fromPools = false;
-        SetMessage("Finding doors and items...");
+        SetMessage(s => s.WorldFinding);
         // Spawns without a record are reported as collected, so a scan that misses records would
         // report them wrongly: anything short of last time's count gets a full scan.
         var records = allocations is null ? [] : WorldRecords.Scan(memory, ids.DoorGuids, ids.SpawnIds, ids.StashGuids, allocations, ct);
@@ -251,7 +254,7 @@ public sealed class WorldStateTracker : IDisposable
 
     private static IReadOnlyDictionary<string, ObjectState>[] EmptyStates() => NewStates();
 
-    private void SetMessage(string? message)
+    private void SetMessage(Func<Strings, string>? message)
     {
         if (message == Message)
             return;

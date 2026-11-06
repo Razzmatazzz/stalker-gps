@@ -1,15 +1,72 @@
-<MudThemeProvider Theme="SiteTheme.Theme" IsDarkMode="true" />
-<MudPopoverProvider />
-<MudDialogProvider />
-<MudSnackbarProvider />
+@implements IDisposable
+@inject Localizer L
+@inject SettingsStore Settings
+@inject IJSRuntime JS
 
-<MudLayout>
-    <MudAppBar Elevation="0" Class="app-header">
-        <Wordmark />
-    </MudAppBar>
-    <MudMainContent>
-        <MudContainer MaxWidth="MaxWidth.Medium" Class="py-4">
-            <Home />
-        </MudContainer>
-    </MudMainContent>
-</MudLayout>
+<MudThemeProvider Theme="SiteTheme.Theme" IsDarkMode="true" />
+<MudRTLProvider RightToLeft="L.IsRightToLeft">
+    <MudPopoverProvider />
+    <MudDialogProvider />
+    <MudSnackbarProvider />
+
+    <MudLayout>
+        @* Left to right in every language: the window's caption buttons sit over the right end. *@
+        <MudAppBar Elevation="0" Class="app-header" dir="ltr">
+            @if (!Compact)
+            {
+                <Wordmark />
+            }
+        </MudAppBar>
+        <MudMainContent>
+            @* Left to right in every language, so the tray stays on the side the window grows. *@
+            <div class="sv-shell" dir="ltr">
+                @* Hidden rather than removed, so unsaved settings survive. *@
+                <div class="sv-shell-app" hidden="@Compact" dir="@(L.IsRightToLeft ? "rtl" : "ltr")">
+                    <MudContainer MaxWidth="MaxWidth.Medium" Class="py-4">
+                        <Home />
+                    </MudContainer>
+                </div>
+                @if (Settings.Current.OverlayEnabled)
+                {
+                    <div class="sv-shell-tray" dir="@(L.IsRightToLeft ? "rtl" : "ltr")">
+                        <MapTray Compact="Compact" />
+                    </div>
+                }
+            </div>
+        </MudMainContent>
+    </MudLayout>
+</MudRTLProvider>
+
+@code {
+    private bool Compact => Settings.Current.OverlayEnabled && Settings.Current.TrayCompact;
+
+    protected override void OnInitialized()
+    {
+        L.Changed += OnLanguageChanged;
+        Settings.Saved += OnSettingsSaved;
+    }
+
+    private void OnSettingsSaved() => InvokeAsync(StateHasChanged);
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+            await ApplyToPageAsync();
+    }
+
+    private void OnLanguageChanged() => InvokeAsync(async () =>
+    {
+        StateHasChanged();
+        await ApplyToPageAsync();
+    });
+
+    // What Blazor doesn't render. lang also picks the right fonts and uppercase rules for the language.
+    private ValueTask ApplyToPageAsync() =>
+        JS.InvokeVoidAsync("svSetLanguage", L.Code, L.IsRightToLeft ? "rtl" : "ltr", L.T.UnhandledError, L.T.Reload);
+
+    public void Dispose()
+    {
+        L.Changed -= OnLanguageChanged;
+        Settings.Saved -= OnSettingsSaved;
+    }
+}

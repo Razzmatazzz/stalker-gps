@@ -42,9 +42,37 @@ Leave the app running while you play. The map reconnects if you restart the app 
 | Tracking | Your position is being read and sent to the map. |
 | Error | Something went wrong. The app retries on its own. |
 
+## Map overlay
+
+The **Map** section has an **Open Map in Browser** button, which opens the map already connected to
+the app and in the app's language.
+
+The overlay shows the map in a small window over the game. Turn it on under **Map**, where you can
+also set its size, opacity and screen corner. Run the game in borderless mode; the overlay
+can't appear over exclusive fullscreen.
+
+Clicks pass through the overlay to the game, so you control the map with hotkeys, or from the **Map
+controls** tray that opens on the right of the app while the overlay is on. The button at the top
+of the tray hides the rest of the app, leaving only the controls on screen.
+
+Hotkeys:
+
+| Hotkey | Action |
+|---|---|
+| `Ctrl+Alt+F5` | Show or hide the overlay |
+| `Ctrl+Alt+F6` | Zoom in |
+| `Ctrl+Alt+F7` | Zoom out |
+| `Ctrl+Alt+F8` | Keep the player centered |
+| `Ctrl+Alt+F9` | Switch the mouse between the game and the overlay (a border shows when the mouse is on the overlay) |
+
+The overlay remembers its map controls, such as the zoom and which markers are shown, between
+sessions.
+
 ## Settings
 
 Open **Settings** at the bottom of the window. Changes take effect when you click **Save**.
+
+**Language** changes right away, with no need to click **Save**. The app follows your Windows language by default, and supports the same 18 languages as the map.
 
 - **Minimize to tray:** minimizing hides the window to the notification area. Double-click the tray
   icon (or right-click it → **Show**) to bring it back; right-click → **Exit** to quit.
@@ -58,7 +86,8 @@ Open **Settings** at the bottom of the window. Changes take effect when you clic
 - **Process names** and **manual pointer chain:** advanced options for troubleshooting. You shouldn't
   need them; the app finds the player automatically, including after game updates.
 
-Settings are saved to `%LocalAppData%\StalkerGPS\settings.json`.
+Settings are saved to `%LocalAppData%\StalkerGPS\settings.json`. The app also remembers where its window
+was, and reopens there on the same monitor if that monitor is still connected.
 
 ## Troubleshooting
 
@@ -92,7 +121,7 @@ The app runs a WebSocket server at `ws://localhost:41347` (configurable). It acc
 only when the `Origin` header is exactly `https://stalker.vodka` or `http://localhost:3000`
 (development); anything else gets `403 Forbidden`.
 
-Messages are JSON text frames. The current status, position, doors, spawns and stashes are sent
+Messages are JSON text frames. The current language, status, position, doors, spawns and stashes are sent
 right after connecting; after that, a message is sent when its contents change.
 
 ```json
@@ -101,8 +130,11 @@ right after connecting; after that, a message is sent when its contents change.
 {"type":"doors","doors":[{"guid":"C1CC15FF421A7A4831C77D8833AA4242","locked":false}, ...]}
 {"type":"spawns","spawns":[{"id":"54780EF6447105E25DB460B6D6DF55A9","collected":true}, ...]}
 {"type":"stashes","stashes":[{"guid":"0B3C1AC54E81E76539977992E73A5EF6","marked":true,"looted":false}, ...]}
+{"type":"language","code":"de"}
 ```
 
+- `language` is the language the app is showing, sent first and again whenever it changes. `code` is
+  one of the map's language codes. It is the language actually in use, so never `auto`.
 - `status` is one of `tracking`, `waitingForGame`, `locating`, `noPlayer`, `error`, `stopped`.
 - `x`, `y`, `z` are game (Unreal Engine) units, in centimeters.
 - `yaw` is the camera heading in degrees, 0 to 360: 0 faces +X and 90 faces +Y (clockwise seen from

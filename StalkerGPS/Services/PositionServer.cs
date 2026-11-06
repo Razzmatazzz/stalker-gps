@@ -7,6 +7,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
 using StalkerGPS.Game;
+using StalkerGPS.Localization;
 
 namespace StalkerGPS.Services;
 
@@ -17,7 +18,8 @@ namespace StalkerGPS.Services;
 /// </summary>
 /// <remarks>
 /// Messages are JSON text frames:
-/// <c>{"type":"status","status":"tracking"}</c> and
+/// <c>{"type":"language","code":"de"}</c> with the app's language, sent first and again if it changes,
+/// <c>{"type":"status","status":"tracking"}</c>,
 /// <c>{"type":"position","x":..,"y":..,"z":..,"yaw":..}</c> (Unreal units, centimeters; yaw is the
 /// camera heading in degrees, 0 to 360, 0 = +X and 90 = +Y, or null if unknown),
 /// <c>{"type":"doors","doors":[{"guid":..,"locked":..}, ...]}</c> with every known door,
@@ -25,7 +27,8 @@ namespace StalkerGPS.Services;
 /// <c>{"type":"stashes","stashes":[{"guid":..,"marked":..,"looted":..}, ...]}</c> with every known stash.
 /// The current state is sent right after connecting; afterwards a message is sent when its contents
 /// change. Doors, spawns and stashes messages always hold the full list, so the latest one is all a
-/// client needs.
+/// client needs. The map sends <c>mapControls</c> and <c>mapState</c> describing what it can be told
+/// to do, and the app sends <c>mapCommand</c> (see <see cref="MapControlSet"/>).
 /// </remarks>
 public sealed class PositionServer : IDisposable
 {
@@ -43,9 +46,16 @@ public sealed class PositionServer : IDisposable
 
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
+    private static readonly JsonSerializerOptions CommandJsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+    };
+
     private readonly PositionTracker _tracker;
     private readonly WorldStateTracker _world;
     private readonly SettingsStore _settings;
+    private readonly Localizer _localizer;
     private readonly ConcurrentDictionary<Client, byte> _clients = new();
     private readonly Lock _stateLock = new();
     private CancellationTokenSource? _cts;
@@ -53,25 +63,41 @@ public sealed class PositionServer : IDisposable
     private string? _lastStatus;
     private string? _lastPosition;
     private readonly string?[] _lastWorld = new string?[Enum.GetValues<RecordKind>().Length];
+    private int _nextCommandId;
 
     /// <summary>The port being listened on, or null if the server isn't running.</summary>
     public int? Port { get; private set; }
 
     /// <summary>Why the server couldn't start (e.g. port in use), or null.</summary>
-    public string? Error { get; private set; }
+    public Func<Strings, string>? Error { get; private set; }
 
     public int ClientCount => _clients.Count;
 
-    /// <summary>Raised when the server starts, stops, fails, or a client connects or disconnects.</summary>
+    /// <summary>The controls of the map being driven, or null if no open map offers any.</summary>
+    public MapControlSet? MapControls => ControlledClient?.Controls;
+
+    /// <summary>The overlay if it's open, otherwise the map page that connected last.</summary>
+    private Client? ControlledClient => _clients.Keys
+        .Where(c => c.Controls is not null)
+        .OrderByDescending(c => c.Controls!.Surface == MapControlSet.OverlaySurface)
+        .ThenByDescending(c => c.Id)
+        .FirstOrDefault();
+
+    /// <summary>
+    /// Raised when the server starts, stops, fails, a client connects or disconnects, or a map's
+    /// controls change.
+    /// </summary>
     public event Action? Changed;
 
-    public PositionServer(PositionTracker tracker, WorldStateTracker world, SettingsStore settings)
+    public PositionServer(PositionTracker tracker, WorldStateTracker world, SettingsStore settings, Localizer localizer)
     {
         _tracker = tracker;
         _world = world;
         _settings = settings;
+        _localizer = localizer;
         _tracker.Changed += OnTrackerChanged;
         _world.KindChanged += OnWorldChanged;
+        _localizer.Changed += OnLanguageChanged;
     }
 
     public void Start()
@@ -95,8 +121,8 @@ public sealed class PositionServer : IDisposable
         {
             listeners.ForEach(l => l.Stop());
             Error = ex.SocketErrorCode == SocketError.AddressAlreadyInUse
-                ? $"Port {port} is already in use. Choose another port in Settings."
-                : $"Could not listen on port {port}: {ex.Message}";
+                ? s => string.Format(s.ServerPortInUse, port)
+                : s => string.Format(s.ServerListenFailed, port, ex.Message);
             Changed?.Invoke();
             return;
         }
@@ -168,7 +194,7 @@ public sealed class PositionServer : IDisposable
             }
         }
 
-        var client = new Client(socket);
+        var client = new Client(socket, OnClientMessage);
         if (_clients.Count >= MaxClients || !_clients.TryAdd(client, 0))
         {
             await client.CloseAsync(WebSocketCloseStatus.PolicyViolation, "Too many connections");
@@ -179,6 +205,8 @@ public sealed class PositionServer : IDisposable
         {
             lock (_stateLock)
             {
+                // First, so the map can label its controls before it hears anything else.
+                client.Enqueue(LanguageMessage());
                 client.Enqueue(_lastStatus ?? StatusMessage(_tracker.Status));
                 if (_lastPosition is not null)
                     client.Enqueue(_lastPosition);
@@ -320,6 +348,47 @@ public sealed class PositionServer : IDisposable
             client.SetLatest(kind, message);
     }
 
+    /// <summary>Tells the map to set a control to <paramref name="value"/> (or none, for an action) or move it by <paramref name="delta"/>.</summary>
+    public void SendMapCommand(string control, object? value = null, double? delta = null)
+    {
+        int id = Interlocked.Increment(ref _nextCommandId);
+        ControlledClient?.Enqueue(JsonSerializer.Serialize(new MapCommandBody("mapCommand", id, control, value, delta), CommandJsonOptions));
+    }
+
+    private void OnClientMessage(Client client, string text)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(text);
+            var message = document.RootElement;
+            switch (message.GetProperty("type").GetString())
+            {
+                case "mapControls":
+                    client.Controls = MapControlSet.Parse(message) is { } list ? list with { Connection = client.Id } : null;
+                    Changed?.Invoke();
+                    break;
+                case "mapState" when client.Controls is { } controls:
+                    client.Controls = controls.WithState(message);
+                    Changed?.Invoke();
+                    break;
+            }
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException or KeyNotFoundException or FormatException)
+        {
+            // Not something this app understands; a newer map may send more than it knows.
+        }
+    }
+
+    private void OnLanguageChanged()
+    {
+        string message = LanguageMessage();
+        foreach (var client in _clients.Keys)
+            client.SetLatestLanguage(message);
+    }
+
+    private string LanguageMessage() =>
+        JsonSerializer.Serialize(new LanguageMessageBody("language", _localizer.Code), JsonOptions);
+
     private static string StatusMessage(TrackerStatus status) =>
         JsonSerializer.Serialize(new StatusMessageBody("status", status switch
         {
@@ -335,8 +404,13 @@ public sealed class PositionServer : IDisposable
     {
         _tracker.Changed -= OnTrackerChanged;
         _world.KindChanged -= OnWorldChanged;
+        _localizer.Changed -= OnLanguageChanged;
         Stop();
     }
+
+    private sealed record LanguageMessageBody(string Type, string Code);
+
+    private sealed record MapCommandBody(string Type, int Id, string Control, object? Value, double? Delta);
 
     private sealed record StatusMessageBody(string Type, string Status);
 
@@ -355,22 +429,35 @@ public sealed class PositionServer : IDisposable
     private sealed record StashEntry(string Guid, bool Marked, bool Looted);
 
     /// <summary>One connected browser. Sends are queued so a slow client never blocks the tracker.</summary>
-    private sealed class Client(WebSocket socket)
+    private sealed class Client(WebSocket socket, Action<Client, string> onMessage)
     {
+        private const int MaxIncomingBytes = 16 * 1024;
+
         // Small bounded queue: if a client falls behind, the oldest updates are dropped.
         private readonly Channel<string> _outgoing = Channel.CreateBounded<string>(
             new BoundedChannelOptions(16) { FullMode = BoundedChannelFullMode.DropOldest, SingleReader = true });
 
-        // The latest doors, spawns and stashes messages wait here instead of in the queue, where they
-        // could be dropped; each holds a full list, so only the newest of each kind matters.
-        private readonly string?[] _pending = new string?[Enum.GetValues<RecordKind>().Length];
+        // The latest doors, spawns, stashes and language messages wait here instead of in the queue,
+        // where they could be dropped; only the newest of each kind matters.
+        private static readonly int LanguageSlot = Enum.GetValues<RecordKind>().Length;
+        private readonly string?[] _pending = new string?[LanguageSlot + 1];
         private static readonly string PendingSignal = new("pending".AsSpan());
+
+        private static long _lastId;
+
+        public long Id { get; } = Interlocked.Increment(ref _lastId);
+
+        public MapControlSet? Controls { get; set; }
 
         public void Enqueue(string message) => _outgoing.Writer.TryWrite(message);
 
-        public void SetLatest(RecordKind kind, string message)
+        public void SetLatest(RecordKind kind, string message) => SetPending((int)kind, message);
+
+        public void SetLatestLanguage(string message) => SetPending(LanguageSlot, message);
+
+        private void SetPending(int slot, string message)
         {
-            Volatile.Write(ref _pending[(int)kind], message);
+            Volatile.Write(ref _pending[slot], message);
             _outgoing.Writer.TryWrite(PendingSignal);
         }
 
@@ -407,19 +494,35 @@ public sealed class PositionServer : IDisposable
             }
         }
 
-        /// <summary>The map doesn't send anything; this only handles close and keep-alive frames.</summary>
+        /// <summary>Handles the map's messages, skipping any too long to be one, and close and keep-alive frames.</summary>
         private async Task ReceiveAsync(CancellationToken ct)
         {
-            var buffer = new byte[1024];
+            var buffer = new byte[MaxIncomingBytes];
+            int length = 0;
+            bool skipping = false;
             try
             {
                 while (socket.State == WebSocketState.Open)
                 {
-                    var result = await socket.ReceiveAsync(buffer, ct);
+                    var result = await socket.ReceiveAsync(buffer.AsMemory(length), ct);
                     if (result.MessageType == WebSocketMessageType.Close)
                     {
                         await socket.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, null, ct);
                         break;
+                    }
+
+                    length += result.Count;
+                    if (result.EndOfMessage)
+                    {
+                        if (!skipping && result.MessageType == WebSocketMessageType.Text)
+                            onMessage(this, Encoding.UTF8.GetString(buffer, 0, length));
+                        length = 0;
+                        skipping = false;
+                    }
+                    else if (length == buffer.Length)
+                    {
+                        length = 0;
+                        skipping = true;
                     }
                 }
             }

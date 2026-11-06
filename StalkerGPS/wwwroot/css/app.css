@@ -218,3 +218,92 @@ body {
 .app-wordmark .wordmark-suffix {
     color: var(--sv-ink);
 }
+
+/* Spaced-out letters break up joined Arabic script. */
+html[lang="ar"] .mud-main-content * {
+    letter-spacing: 0 !important;
+}
+
+/* Map overlay and map controls */
+.sv-hotkeys {
+    color: var(--sv-muted);
+    display: grid;
+    font-size: 13px;
+    gap: 4px 16px;
+    grid-template-columns: max-content 1fr;
+    margin: 0;
+}
+
+.sv-hotkeys dt {
+    color: var(--sv-ink);
+    font-family: var(--sv-mono);
+    font-size: 12px;
+}
+
+.sv-hotkeys dd {
+    margin: 0;
+}
+
+.sv-control-group {
+    margin-top: 12px;
+}
+
+.sv-control-child {
+    padding-inline-start: 24px;
+}
+
+/* The app beside the map controls tray; each scrolls on its own. */
+.sv-shell {
+    display: flex;
+    height: calc(100vh - var(--mud-appbar-height));
+}
+
+.sv-shell-app {
+    flex: 1;
+    min-width: 0;
+    overflow-y: auto;
+}
+
+.sv-shell-tray {
+    flex: 0 0 300px;
+    min-width: 0;
+}
+
+.sv-shell-app[hidden] + .sv-shell-tray {
+    flex: 1;
+}
+
+.sv-tray {
+    background: var(--sv-panel);
+    border-inline-start: 1px solid var(--sv-line);
+    box-sizing: border-box;
+    height: 100%;
+    overflow-y: auto;
+    padding: 16px;
+}
+
+.sv-tray-compact {
+    border-inline-start: 0;
+}
+
+.sv-tray-header {
+    align-items: center;
+    display: flex;
+    gap: 8px;
+    justify-content: space-between;
+    margin-bottom: 8px;
+}
+
+.sv-tray-title {
+    color: var(--sv-ink);
+    font-family: var(--sv-display);
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    margin: 0;
+    text-transform: uppercase;
+}
+
+.sv-tray .mud-switch .mud-typography {
+    font-size: 13px;
+}

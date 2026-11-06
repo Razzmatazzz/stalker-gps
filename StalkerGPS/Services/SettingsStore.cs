@@ -4,6 +4,14 @@ using System.Text.Json;
 
 namespace StalkerGPS.Services;
 
+public enum OverlayCorner
+{
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
 public sealed class TrackerSettings
 {
     /// <summary>Process names to look for, without ".exe" (Steam and Game Pass builds).</summary>
@@ -36,6 +44,34 @@ public sealed class TrackerSettings
     /// <summary>Open minimized (to the tray, if <see cref="MinimizeToTray"/> is on).</summary>
     public bool StartMinimized { get; set; }
 
+    /// <summary>Language code, or null to follow Windows' display language.</summary>
+    public string? Language { get; set; }
+
+    /// <summary>Show the map in a small window over the game.</summary>
+    public bool OverlayEnabled { get; set; }
+
+    /// <summary>The overlay's width and height.</summary>
+    public int OverlaySize { get; set; } = 420;
+
+    /// <summary>How opaque the overlay is, in percent.</summary>
+    public int OverlayOpacity { get; set; } = 90;
+
+    public OverlayCorner OverlayCorner { get; set; } = OverlayCorner.TopRight;
+
+    /// <summary>Where the window was when the app last closed, which also identifies the monitor.</summary>
+    public double? WindowLeft { get; set; }
+
+    public double? WindowTop { get; set; }
+
+    /// <summary>Hide the rest of the app, leaving only the map controls tray.</summary>
+    public bool TrayCompact { get; set; }
+
+    /// <summary>The overlay's on/off map controls that the user has changed, by control ID.</summary>
+    public Dictionary<string, bool> MapToggles { get; set; } = [];
+
+    /// <summary>The overlay's numeric map controls that the user has changed, by control ID.</summary>
+    public Dictionary<string, double> MapRanges { get; set; } = [];
+
     public static bool TryParseHex(string text, out long value)
     {
         var s = text.Trim();
@@ -49,6 +85,8 @@ public sealed class TrackerSettings
 public sealed class SettingsStore
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+
+    private readonly Lock _lock = new();
 
     private readonly string _path = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -81,11 +119,66 @@ public sealed class SettingsStore
         return new TrackerSettings();
     }
 
-    public void Save(TrackerSettings settings)
+    /// <summary>Changes some settings and saves them all.</summary>
+    public void Update(Action<TrackerSettings> change)
+    {
+        lock (_lock)
+        {
+            change(Current);
+            Write();
+        }
+        Saved?.Invoke();
+    }
+
+    /// <summary>The remembered map controls, as booleans and doubles.</summary>
+    public Dictionary<string, object> MapControlValues()
+    {
+        lock (_lock)
+        {
+            return Current.MapToggles.Select(kv => (kv.Key, Value: (object)kv.Value))
+                .Concat(Current.MapRanges.Select(kv => (kv.Key, Value: (object)kv.Value)))
+                .ToDictionary(kv => kv.Key, kv => kv.Value);
+        }
+    }
+
+    /// <summary>
+    /// Saves one map control. <see cref="Saved"/> isn't raised, because nothing else depends on these
+    /// and the map can report them often.
+    /// </summary>
+    public void RememberMapControl(string id, object value) => Remember(settings =>
+    {
+        if (value is bool on)
+            settings.MapToggles[id] = on;
+        else if (value is double number)
+            settings.MapRanges[id] = number;
+    });
+
+    /// <summary>Saves where the window is, without raising <see cref="Saved"/>.</summary>
+    public void RememberWindowPosition(double left, double top) => Remember(settings =>
+    {
+        settings.WindowLeft = left;
+        settings.WindowTop = top;
+    });
+
+    // If the file is busy, the next save writes the change.
+    private void Remember(Action<TrackerSettings> change)
+    {
+        lock (_lock)
+        {
+            change(Current);
+            try
+            {
+                Write();
+            }
+            catch (IOException)
+            {
+            }
+        }
+    }
+
+    private void Write()
     {
         Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
-        File.WriteAllText(_path, JsonSerializer.Serialize(settings, JsonOptions));
-        Current = settings;
-        Saved?.Invoke();
+        File.WriteAllText(_path, JsonSerializer.Serialize(Current, JsonOptions));
     }
 }

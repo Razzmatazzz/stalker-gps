@@ -3,6 +3,7 @@
 @inject PositionServer Server
 @inject WorldStateTracker World
 @inject SettingsStore Settings
+@inject Localizer L
 @inject ISnackbar Snackbar
 
 <MudStack Spacing="3">
@@ -38,7 +39,7 @@
         @* Shown in every build: without the server the map can't receive positions. *@
         @if (Server.Error is { } serverError)
         {
-            <p class="sv-copy sv-error">@serverError</p>
+            <p class="sv-copy sv-error">@serverError(T)</p>
         }
     </section>
 
@@ -47,39 +48,75 @@
         {
             <section class="sv-panel sv-coord">
                 <span class="sv-label">@axis</span>
-                <span class="sv-value">@(value is double d ? (d / 100).ToString("N2") : "—")</span>
+                <span class="sv-value"><bdi dir="ltr">@(value is double d ? L.Number(d / 100, "N2") : "—")</bdi></span>
             </section>
         }
         <section class="sv-panel sv-coord">
-            <span class="sv-label">Heading</span>
-            <span class="sv-value">@(Tracker.Position?.Yaw is double yaw ? $"{yaw:N0}°" : "—")</span>
+            <span class="sv-label">@T.Heading</span>
+            <span class="sv-value"><bdi dir="ltr">@(Tracker.Position?.Yaw is double yaw ? $"{L.Number(yaw)}°" : "—")</bdi></span>
         </section>
     </div>
 
     <MudExpansionPanels Outlined="true" Elevation="0" Class="sv-settings">
-        <MudExpansionPanel Text="Settings">
+        <MudExpansionPanel Text="@T.MapTitle">
             <MudStack Spacing="2">
-                <MudText Typo="Typo.body2" Class="mud-text-secondary">Saved to @Settings.FilePath</MudText>
-                <MudTextField @bind-Value="_processNames" Label="Process names (comma separated, no .exe)" Variant="Variant.Outlined" />
-                <MudNumericField @bind-Value="_pollIntervalMs" Label="Position update interval while the game is running (ms)" Min="10" Max="2000" Variant="Variant.Outlined" />
-                <MudNumericField @bind-Value="_gameCheckIntervalSeconds" Label="Check for the game every (seconds)" Min="1" Max="300" Variant="Variant.Outlined" />
-                <MudNumericField @bind-Value="_webSocketPort" Label="Map connection port" Min="1024" Max="65535" Variant="Variant.Outlined"
-                                 HelperText="The stalker.vodka map connects to ws://localhost on this port." />
-                <MudSwitch @bind-Value="_minimizeToTray" Color="Color.Primary" Label="Minimize to tray" />
-                <MudSwitch @bind-Value="_startMinimized" Color="Color.Primary" Label="Start minimized" />
+                <MudStack Row="true">
+                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" OnClick="OpenMapInBrowser">@T.OpenMapInBrowser</MudButton>
+                </MudStack>
+                <span class="sv-label sv-control-group">@T.OverlaySection</span>
+                <MudSwitch T="bool" Value="Settings.Current.OverlayEnabled" ValueChanged="@(on => Settings.Update(s => s.OverlayEnabled = on))"
+                           Color="Color.Primary" Label="@T.OverlayShow" />
+                <MudSelect T="OverlayCorner" Value="Settings.Current.OverlayCorner" ValueChanged="@(corner => Settings.Update(s => s.OverlayCorner = corner))"
+                           ToStringFunc="CornerName" Label="@T.OverlayCorner" Variant="Variant.Outlined">
+                    @foreach (var corner in Enum.GetValues<OverlayCorner>())
+                    {
+                        <MudSelectItem T="OverlayCorner" Value="corner">@CornerName(corner)</MudSelectItem>
+                    }
+                </MudSelect>
+                <MudSlider T="int" Value="Settings.Current.OverlaySize" ValueChanged="@(size => Settings.Update(s => s.OverlaySize = size))"
+                           Min="240" Max="800" Step="20" Immediate="false" Color="Color.Primary">@T.OverlaySize: @L.Number(Settings.Current.OverlaySize)</MudSlider>
+                <MudSlider T="int" Value="Settings.Current.OverlayOpacity" ValueChanged="@(opacity => Settings.Update(s => s.OverlayOpacity = opacity))"
+                           Min="30" Max="100" Step="5" Immediate="false" Color="Color.Primary">@T.OverlayOpacity: @L.Number(Settings.Current.OverlayOpacity)</MudSlider>
+                <span class="sv-label">@T.OverlayHotkeys</span>
+                <dl class="sv-hotkeys">
+                    @foreach (var (keys, action) in Hotkeys)
+                    {
+                        <dt><bdi dir="ltr">@keys</bdi></dt>
+                        <dd>@action</dd>
+                    }
+                </dl>
+            </MudStack>
+        </MudExpansionPanel>
+        <MudExpansionPanel Text="@T.Settings">
+            <MudStack Spacing="2">
+                <MudText Typo="Typo.body2" Class="mud-text-secondary">@string.Format(T.SavedTo, Localizer.Isolated(Settings.FilePath))</MudText>
+                <MudSelect T="string" Value="_language" ValueChanged="OnLanguageSelected" ToStringFunc="LanguageName" Label="@T.Language" Variant="Variant.Outlined">
+                    <MudSelectItem T="string" Value="@AutomaticLanguage">@T.LanguageAutomatic</MudSelectItem>
+                    @foreach (var language in Localizer.Languages)
+                    {
+                        <MudSelectItem T="string" Value="@language.Code">@language.Name</MudSelectItem>
+                    }
+                </MudSelect>
+                <MudTextField @bind-Value="_processNames" Label="@T.ProcessNames" Variant="Variant.Outlined" />
+                <MudNumericField @bind-Value="_pollIntervalMs" Label="@T.PollInterval" Min="10" Max="2000" Variant="Variant.Outlined" />
+                <MudNumericField @bind-Value="_gameCheckIntervalSeconds" Label="@T.GameCheckInterval" Min="1" Max="300" Variant="Variant.Outlined" />
+                <MudNumericField @bind-Value="_webSocketPort" Label="@T.MapPort" Min="1024" Max="65535" Variant="Variant.Outlined"
+                                 HelperText="@T.MapPortHelp" />
+                <MudSwitch @bind-Value="_minimizeToTray" Color="Color.Primary" Label="@T.MinimizeToTray" />
+                <MudSwitch @bind-Value="_startMinimized" Color="Color.Primary" Label="@T.StartMinimized" />
                 <MudSwitch @bind-Value="_useManual" Color="Color.Primary"
-                           Label="Use a manual pointer chain instead of finding the player automatically" />
+                           Label="@T.UseManualChain" />
                 @if (_useManual)
                 {
                     <MudText Typo="Typo.body2" Class="mud-text-secondary">
-                        Cheat Engine style chain: [[game.exe + base] + offset1] + ... + last offset → player location (3 doubles).
+                        @string.Format(T.ManualChainHelp, Localizer.Isolated("[[game.exe + base] + offset1] + ... + last offset"))
                     </MudText>
-                    <MudTextField @bind-Value="_baseOffset" Label="Base offset (hex)" Variant="Variant.Outlined" />
-                    <MudTextField @bind-Value="_offsets" Label="Offsets (hex, comma separated)" Variant="Variant.Outlined"
-                                  HelperText="Example: 0x30, 0x2A0, 0x1A0, 0x128" />
+                    <MudTextField @bind-Value="_baseOffset" Label="@T.BaseOffset" Variant="Variant.Outlined" />
+                    <MudTextField @bind-Value="_offsets" Label="@T.Offsets" Variant="Variant.Outlined"
+                                  HelperText="@string.Format(T.OffsetsExample, Localizer.Isolated("0x30, 0x2A0, 0x1A0, 0x128"))" />
                 }
                 <MudStack Row="true" Justify="Justify.FlexEnd">
-                    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveAsync">Save</MudButton>
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveAsync">@T.Save</MudButton>
                 </MudStack>
             </MudStack>
         </MudExpansionPanel>
@@ -94,6 +131,9 @@
     private static readonly bool ShowDiagnostics = false;
 #endif
 
+    private const string AutomaticLanguage = "";
+
+    private string _language = AutomaticLanguage;
     private string _processNames = "";
     private string _baseOffset = "";
     private string _offsets = "";
@@ -103,6 +143,25 @@
     private bool _startMinimized;
     private bool _useManual;
     private int _webSocketPort;
+
+    private Strings T => L.T;
+
+    private (string Keys, string Action)[] Hotkeys =>
+    [
+        ("Ctrl+Alt+F5", T.HotkeyToggle),
+        ("Ctrl+Alt+F6", T.HotkeyZoomIn),
+        ("Ctrl+Alt+F7", T.HotkeyZoomOut),
+        ("Ctrl+Alt+F8", T.HotkeyFollow),
+        ("Ctrl+Alt+F9", T.HotkeyInteract),
+    ];
+
+    private string CornerName(OverlayCorner corner) => corner switch
+    {
+        OverlayCorner.TopLeft => T.CornerTopLeft,
+        OverlayCorner.TopRight => T.CornerTopRight,
+        OverlayCorner.BottomLeft => T.CornerBottomLeft,
+        _ => T.CornerBottomRight,
+    };
 
     private (string Axis, double? Value)[] Axes =>
     [
@@ -121,24 +180,28 @@
         _ => "idle",
     };
 
-    private string WorldStatusText => World.Message
-        ?? $"Doors and items loaded: {World.Doors.Count:N0} doors ({World.Doors.Values.Count(s => s.HasFlag(ObjectState.Locked)):N0} locked) · "
-            + $"{World.Spawns.Count:N0} items ({World.Spawns.Values.Count(s => s.HasFlag(ObjectState.Collected)):N0} picked up) · "
-            + $"{World.Stashes.Count:N0} stashes ({World.Stashes.Values.Count(s => s.HasFlag(ObjectState.Marked)):N0} on your map, {World.Stashes.Values.Count(s => s.HasFlag(ObjectState.Looted)):N0} looted)";
+    private string WorldStatusText => World.Message?.Invoke(T) ?? string.Format(T.WorldLoaded,
+        L.Number(World.Doors.Count), Count(World.Doors, ObjectState.Locked),
+        L.Number(World.Spawns.Count), Count(World.Spawns, ObjectState.Collected),
+        L.Number(World.Stashes.Count), Count(World.Stashes, ObjectState.Marked), Count(World.Stashes, ObjectState.Looted));
+
+    private string Count(IReadOnlyDictionary<string, ObjectState> states, ObjectState flag) =>
+        L.Number(states.Values.Count(s => s.HasFlag(flag)));
 
     private string StatusText => Tracker.Status switch
     {
-        TrackerStatus.Attached => "Tracking",
-        TrackerStatus.WaitingForGame => "Waiting for game",
-        TrackerStatus.Locating => "Locating player",
-        TrackerStatus.PointerInvalid => "No player",
-        TrackerStatus.Error => "Error",
-        _ => "Starting",
+        TrackerStatus.Attached => T.StatusTracking,
+        TrackerStatus.WaitingForGame => T.StatusWaitingForGame,
+        TrackerStatus.Locating => T.StatusLocating,
+        TrackerStatus.PointerInvalid => T.StatusNoPlayer,
+        TrackerStatus.Error => T.StatusError,
+        _ => T.StatusStarting,
     };
 
     protected override void OnInitialized()
     {
         var s = Settings.Current;
+        _language = s.Language ?? AutomaticLanguage;
         _processNames = string.Join(", ", s.ProcessNames);
         _baseOffset = s.BaseOffset;
         _offsets = string.Join(", ", s.Offsets);
@@ -151,9 +214,23 @@
         Tracker.Changed += OnStateChanged;
         Server.Changed += OnStateChanged;
         World.Changed += OnStateChanged;
+        L.Changed += OnStateChanged;
     }
 
     private void OnStateChanged() => InvokeAsync(StateHasChanged);
+
+    private void OpenMapInBrowser() =>
+        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
+            MapSite.BrowserUrl(Settings.Current.WebSocketPort, L.Code)) { UseShellExecute = true });
+
+    private string LanguageName(string code) =>
+        Localizer.Languages.FirstOrDefault(l => l.Code == code)?.Name ?? T.LanguageAutomatic;
+
+    private void OnLanguageSelected(string code)
+    {
+        _language = code;
+        Settings.Update(s => s.Language = code == AutomaticLanguage ? null : code);
+    }
 
     private async Task SaveAsync()
     {
@@ -161,27 +238,27 @@
         var invalid = offsets.Prepend(_baseOffset).FirstOrDefault(o => !TrackerSettings.TryParseHex(o, out _));
         if (invalid is not null)
         {
-            Snackbar.Add($"'{invalid}' is not a valid hex value.", Severity.Error);
+            Snackbar.Add(string.Format(T.InvalidHex, invalid), Severity.Error);
             return;
         }
 
-        Settings.Save(new TrackerSettings
+        Settings.Update(s =>
         {
-            ProcessNames = Split(_processNames),
-            UseManualPointerChain = _useManual,
-            BaseOffset = _baseOffset.Trim(),
-            Offsets = offsets,
-            PollIntervalMs = _pollIntervalMs,
-            GameCheckIntervalSeconds = _gameCheckIntervalSeconds,
-            MinimizeToTray = _minimizeToTray,
-            StartMinimized = _startMinimized,
-            WebSocketPort = _webSocketPort,
+            s.ProcessNames = Split(_processNames);
+            s.UseManualPointerChain = _useManual;
+            s.BaseOffset = _baseOffset.Trim();
+            s.Offsets = offsets;
+            s.PollIntervalMs = _pollIntervalMs;
+            s.GameCheckIntervalSeconds = _gameCheckIntervalSeconds;
+            s.MinimizeToTray = _minimizeToTray;
+            s.StartMinimized = _startMinimized;
+            s.WebSocketPort = _webSocketPort;
         });
 
         // Restart so a new mode, interval or process name takes effect. (The map server
         // restarts itself if the port changed.)
         await Tracker.RestartAsync();
-        Snackbar.Add("Settings saved.", Severity.Success);
+        Snackbar.Add(T.SettingsSaved, Severity.Success);
     }
 
     private static List<string> Split(string text) =>
@@ -192,5 +269,6 @@
         Tracker.Changed -= OnStateChanged;
         Server.Changed -= OnStateChanged;
         World.Changed -= OnStateChanged;
+        L.Changed -= OnStateChanged;
     }
 }
