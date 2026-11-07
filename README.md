@@ -49,7 +49,9 @@ the app and in the app's language.
 
 The overlay shows the map in a small window over the game. Turn it on under **Map**, where you can
 also set its size, opacity and screen corner. Run the game in borderless mode; the overlay
-can't appear over exclusive fullscreen.
+can't appear over exclusive fullscreen. It only shows while the game or this app is the window in
+front, and hides while a game menu such as the inventory or PDA is open, which the app tells from
+the game showing its mouse cursor, unless the mouse is on the overlay.
 
 Clicks pass through the overlay to the game, so you control the map with hotkeys, or from the **Map
 controls** tray that opens on the right of the app while the overlay is on. The button at the top
@@ -121,7 +123,7 @@ The app runs a WebSocket server at `ws://localhost:41347` (configurable). It acc
 only when the `Origin` header is exactly `https://stalker.vodka` or `http://localhost:3000`
 (development); anything else gets `403 Forbidden`.
 
-Messages are JSON text frames. The current language, status, position, doors, spawns and stashes are sent
+Messages are JSON text frames. The current language, status, position, doors, spawns, stashes, artifacts, objectives and barricades are sent
 right after connecting; after that, a message is sent when its contents change.
 
 ```json
@@ -130,6 +132,9 @@ right after connecting; after that, a message is sent when its contents change.
 {"type":"doors","doors":[{"guid":"C1CC15FF421A7A4831C77D8833AA4242","locked":false}, ...]}
 {"type":"spawns","spawns":[{"id":"54780EF6447105E25DB460B6D6DF55A9","collected":true}, ...]}
 {"type":"stashes","stashes":[{"guid":"0B3C1AC54E81E76539977992E73A5EF6","marked":true,"looted":false}, ...]}
+{"type":"artifacts","artifacts":[{"id":"GArtifactWrenched","x":434943,"y":528939,"z":123}]}
+{"type":"objectives","objectives":[{"id":"SQ03_Tonnel","journalQuest":"SQ03","markers":[{"x":398460,"y":593520,"z":220}]}],"targets":[{"x":419295,"y":526079,"z":1734,"objectives":[{"id":"E02_MQ02_Rihter","journalQuest":"E02_MQ02"}]}]}
+{"type":"barricades","barricades":[{"id":"5011D21546A2E526C267108CB219D13F","planks":6,"destroyed":6,"cleared":true}, ...]}
 {"type":"language","code":"de"}
 ```
 
@@ -140,7 +145,8 @@ right after connecting; after that, a message is sent when its contents change.
 - `yaw` is the camera heading in degrees, 0 to 360: 0 faces +X and 90 faces +Y (clockwise seen from
   above). It's `null` when unknown.
 - `doors` lists the lock state of the map's doors, keyed by the same `guid` as in the map's lock
-  data (`kind` `"door"`).
+  data (`kind` `"door"`). It also lists devices a quest switches on, such as bunker doors and
+  levers, as unlocked once they're on (only some devices are in the game's memory).
 - `spawns` lists whether the map's world spawns (items lying in the world) have been picked up,
   keyed by the same `id` as the items' `foundAt` entries.
 - `stashes` lists the map's stashes, keyed by the stash's GUID, read from a `guid` (or `id`) field
@@ -148,6 +154,27 @@ right after connecting; after that, a message is sent when its contents change.
   becomes true once the player learns of it and false again once it's looted. `looted` is whether
   the stash has been opened and has nothing left in it; a stash opened with items left in it isn't
   looted.
+- `artifacts` lists the artifacts the game has loaded around the player right now, so it holds only
+  ones nearby and is empty without a player. Each is checked every 3 seconds, and they can jump
+  several meters at a time. `id` is the same `id` as in the map's artifact data. A fake artifact
+  has the real one's `id`, and so does a quest artifact made from another artifact's blueprint.
+  They are live objects, not the map's fixed spawns, and each message replaces the last one.
+- `objectives` comes from the markers the game shows for quests, checked every 2 seconds. `objectives`
+  lists the objectives with a marker at a fixed place: `id` and `journalQuest` are the same as in a
+  stage in `quests.json`, and `markers` holds where the game shows it (in cm). A stage can list
+  several places when the quest picks one of them, so show only the stage's markers at these
+  places. If several objectives share a location, each is listed. `targets` lists the
+  quest markers that follow something, usually NPCs, so they move. Each target's `objectives` says
+  what it's for. That's one stage once its quest is known, which the app works out from the other
+  markers of that quest. Until then it's every stage that follows the object, from `markerTargets`
+  in `quests.json`, and it's empty if the object isn't known either. An objective with no marker isn't reported, so this isn't the full journal, and a quest can be
+  active with nothing listed for it. Each message replaces the last one.
+- `barricades` lists every boarded-up opening, keyed by the `barricade` ID of its opener in the map's
+  lock data, with how many of its `planks` are `destroyed`. `cleared` is true once all are. Planks
+  the game has no record of count as destroyed, except quest planks (`questPlanks`), which may just
+  not have appeared yet, so check the count rather than assuming a cleared barricade was seen being
+  broken. Each message holds the full list, so replace any earlier one. An empty list means the
+  state is unknown.
 - The app downloads the map's data from `assets.stalker.vodka` to know which doors, spawns and
   stashes to look for (and caches it for offline use), so ones added there are picked up the next
   time the app starts. Each doors, spawns or stashes message holds the full list, so replace any
@@ -158,4 +185,6 @@ right after connecting; after that, a message is sent when its contents change.
 - The game drops a picked-up spawn from memory when it next starts, so a spawn the game has no
   record of is reported as collected. The exception is a spawn that only appears through a quest
   (`spawnedByQuests` isn't empty): it may just not have appeared yet, so it's left out of the list
-  and should be treated as unknown. Doors the game has no record of are left out too.
+  and should be treated as unknown. The game deletes a quest's spawn as soon as it's picked up,
+  so one the app saw that then disappears is reported as collected, until the app restarts or
+  another save is loaded. Doors the game has no record of are left out too.

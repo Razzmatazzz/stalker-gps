@@ -29,8 +29,8 @@
                                        Disabled="!control.Enabled" Color="Color.Primary" Label="@control.Label" />
                             break;
                         case MapControlKind.Range:
-                            <MudSlider T="double" Value="control.Number ?? control.Min" ValueChanged="@(value => Server.SendMapCommand(control.Id, value))"
-                                       Min="control.Min" Max="control.Max" Step="control.Step" Immediate="false"
+                            <MudSlider T="double" Value="SliderValue(control)" ValueChanged="@(value => Slide(control, value))"
+                                       Min="control.Min" Max="control.Max" Step="control.Step" Immediate="true"
                                        Disabled="!control.Enabled" Color="Color.Primary">@control.Label</MudSlider>
                             break;
                         case MapControlKind.Action:
@@ -53,6 +53,23 @@
     public bool Compact { get; set; }
 
     private Strings T => L.T;
+
+    // A slider sends its value as it's dragged, so the map follows at once. The map reports its state
+    // back a moment later, so until the dragging stops the slider keeps the value it was dragged to
+    // rather than jumping back to an older one.
+    private static readonly TimeSpan SlideSettle = TimeSpan.FromSeconds(1);
+    private readonly Dictionary<string, (double Value, DateTime At)> _sliding = [];
+
+    private double SliderValue(MapControl control) =>
+        _sliding.TryGetValue(control.Id, out var slide) && DateTime.UtcNow - slide.At < SlideSettle
+            ? slide.Value
+            : control.Number ?? control.Min;
+
+    private void Slide(MapControl control, double value)
+    {
+        _sliding[control.Id] = (value, DateTime.UtcNow);
+        Server.SendMapCommand(control.Id, value);
+    }
 
     private string ToggleLabel => Compact ? T.TrayShowApp : T.TrayShowControlsOnly;
 

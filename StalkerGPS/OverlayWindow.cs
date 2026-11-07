@@ -1,8 +1,10 @@
+using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Threading;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
 using StalkerGPS.Localization;
@@ -13,6 +15,9 @@ namespace StalkerGPS;
 /// <summary>
 /// The website's map in a small always-on-top window over the game. Clicks pass through to the game
 /// until the user turns that off, so the map is driven by hotkeys and the main window's map controls.
+/// It only shows while the game (or this app, to use the map controls) is in front, and steps aside
+/// while a game menu such as the inventory or PDA is open: the game hides the mouse cursor while the
+/// player is in the world and shows it in its menus.
 /// </summary>
 public sealed partial class OverlayWindow : Window
 {
@@ -23,6 +28,8 @@ public sealed partial class OverlayWindow : Window
     private const uint LwaAlpha = 2, ModAlt = 1, ModControl = 2, ModNoRepeat = 0x4000;
     private const int WmStyleChanging = 0x7C;
     private const int WmHotKey = 0x312;
+    private const int CursorShowing = 0x1;
+    private static readonly TimeSpan ForegroundCheckInterval = TimeSpan.FromMilliseconds(150);
 
     private enum Hotkey
     {
@@ -40,6 +47,12 @@ public sealed partial class OverlayWindow : Window
     private nint _hwnd;
     private string? _url;
     private bool _interactive;
+    private bool _hiddenByUser, _hiddenAway;
+    private readonly DispatcherTimer _foregroundCheck;
+    private nint _lastForeground;
+    private FrontWindow _lastForegroundKind;
+
+    private enum FrontWindow { Other, Game, ThisApp }
 
     public OverlayWindow(SettingsStore settings, Localizer localizer, PositionServer server)
     {
@@ -63,7 +76,58 @@ public sealed partial class OverlayWindow : Window
         };
         Loaded += OnLoaded;
         ApplyPlacement();
+        _foregroundCheck = new DispatcherTimer(ForegroundCheckInterval, DispatcherPriority.Background, (_, _) => CheckForeground(), Dispatcher);
     }
+
+    /// <summary>
+    /// Hides the map while another program is in front, or the game is in front with its cursor
+    /// showing, i.e. a menu is open.
+    /// </summary>
+    private void CheckForeground()
+    {
+        bool hide = InFront() switch
+        {
+            FrontWindow.Other => true,
+            FrontWindow.Game => !_interactive && CursorShown(),
+            _ => false,
+        };
+        if (hide == _hiddenAway)
+            return;
+        _hiddenAway = hide;
+        UpdateVisibility();
+    }
+
+    private static bool CursorShown()
+    {
+        var info = new CursorInfo { Size = Marshal.SizeOf<CursorInfo>() };
+        return GetCursorInfo(ref info) && (info.Flags & CursorShowing) != 0;
+    }
+
+    private FrontWindow InFront()
+    {
+        var foreground = GetForegroundWindow();
+        if (foreground == _lastForeground)
+            return _lastForegroundKind;
+        _lastForeground = foreground;
+        _lastForegroundKind = FrontWindow.Other;
+        if (GetWindowThreadProcessId(foreground, out uint pid) == 0)
+            return _lastForegroundKind;
+        if (pid == Environment.ProcessId)
+            return _lastForegroundKind = FrontWindow.ThisApp;
+        try
+        {
+            using var process = Process.GetProcessById((int)pid);
+            if (_settings.Current.ProcessNames.Contains(process.ProcessName, StringComparer.OrdinalIgnoreCase))
+                _lastForegroundKind = FrontWindow.Game;
+        }
+        catch (ArgumentException)
+        {
+            // The process has exited.
+        }
+        return _lastForegroundKind;
+    }
+
+    private void UpdateVisibility() => Visibility = _hiddenByUser || _hiddenAway ? Visibility.Hidden : Visibility.Visible;
 
     /// <summary>Applies the current settings and language.</summary>
     public void ApplySettings()
@@ -128,6 +192,7 @@ public sealed partial class OverlayWindow : Window
         _hwnd = new WindowInteropHelper(this).Handle;
         HwndSource.FromHwnd(_hwnd)!.AddHook(WndProc);
         ApplyWindowStyle();
+        _foregroundCheck.Start();
         RegisterHotKey(_hwnd, (int)Hotkey.Toggle, ModControl | ModAlt | ModNoRepeat, 0x74);   // Ctrl+Alt+F5
         RegisterHotKey(_hwnd, (int)Hotkey.ZoomIn, ModControl | ModAlt, 0x75);                 // Ctrl+Alt+F6
         RegisterHotKey(_hwnd, (int)Hotkey.ZoomOut, ModControl | ModAlt, 0x76);                // Ctrl+Alt+F7
@@ -151,7 +216,8 @@ public sealed partial class OverlayWindow : Window
         switch ((Hotkey)(int)wParam)
         {
             case Hotkey.Toggle:
-                Visibility = IsVisible ? Visibility.Hidden : Visibility.Visible;
+                _hiddenByUser = !_hiddenByUser;
+                UpdateVisibility();
                 break;
             case Hotkey.ZoomIn:
                 _server.SendMapCommand("zoom", delta: 1);
@@ -184,6 +250,7 @@ public sealed partial class OverlayWindow : Window
 
     protected override void OnClosed(EventArgs e)
     {
+        _foregroundCheck.Stop();
         _web.Dispose();
         base.OnClosed(e);
     }
@@ -201,4 +268,23 @@ public sealed partial class OverlayWindow : Window
     [LibraryImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool RegisterHotKey(nint hwnd, int id, uint modifiers, uint vk);
+
+    [LibraryImport("user32.dll")]
+    private static partial nint GetForegroundWindow();
+
+    [LibraryImport("user32.dll")]
+    private static partial uint GetWindowThreadProcessId(nint hwnd, out uint processId);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetCursorInfo(ref CursorInfo info);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct CursorInfo
+    {
+        public int Size;
+        public int Flags;
+        public nint Cursor;
+        public int X, Y;
+    }
 }

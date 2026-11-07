@@ -16,6 +16,8 @@ namespace StalkerGPS.Services;
 /// A picked-up spawn keeps its record (marked collected) until the game is restarted; a save
 /// loaded in a fresh game has no record for it at all. So a spawn with no record counts as
 /// collected, except one that only appears through a quest, which may just not have appeared yet.
+/// A quest's spawn is different once picked up: the game deletes it outright. So one whose record
+/// was seen since the last scan, and is now gone, counts as collected.
 /// </remarks>
 public sealed class WorldStateTracker : IDisposable
 {
@@ -40,6 +42,9 @@ public sealed class WorldStateTracker : IDisposable
     private Task? _loop;
     private IReadOnlyDictionary<string, ObjectState>[] _states = EmptyStates();
     private int _recordCount;
+
+    // Quest spawns whose record has been read since the records were last found.
+    private readonly HashSet<string> _seenQuestSpawns = [];
 
     /// <summary>Each door found (<see cref="ObjectState.Locked"/>), by GUID.</summary>
     public IReadOnlyDictionary<string, ObjectState> Doors => _states[(int)RecordKind.Door];
@@ -135,7 +140,7 @@ public sealed class WorldStateTracker : IDisposable
                         else if (records.Count > 0)
                         {
                             if (fromPools && DateTime.UtcNow - lastScan > PoolRefreshInterval
-                                && WorldRecords.ScanPools(game, ids.DoorGuids, ids.SpawnIds, ids.StashGuids) is { Count: > 0 } refreshed)
+                                && WorldRecords.ScanPools(game, ids.DoorGuids, ids.SpawnIds, ids.StashGuids, ids.Devices) is { Count: > 0 } refreshed)
                             {
                                 records = refreshed;
                                 lastScan = DateTime.UtcNow;
@@ -174,7 +179,8 @@ public sealed class WorldStateTracker : IDisposable
     /// </summary>
     private List<WorldRecord> Scan(ProcessMemory memory, MapData ids, ref HashSet<nint>? allocations, out bool fromPools, CancellationToken ct)
     {
-        if (WorldRecords.ScanPools(memory, ids.DoorGuids, ids.SpawnIds, ids.StashGuids) is { Count: > 0 } pooled)
+        _seenQuestSpawns.Clear();
+        if (WorldRecords.ScanPools(memory, ids.DoorGuids, ids.SpawnIds, ids.StashGuids, ids.Devices) is { Count: > 0 } pooled)
         {
             fromPools = true;
             _recordCount = pooled.Count;
@@ -193,19 +199,33 @@ public sealed class WorldStateTracker : IDisposable
         return records;
     }
 
-    private static Dictionary<string, ObjectState>[] ReadAll(ProcessMemory memory, List<WorldRecord> records, MapData ids, out int missing)
+    private Dictionary<string, ObjectState>[] ReadAll(ProcessMemory memory, List<WorldRecord> records, MapData ids, out int missing)
     {
         var states = NewStates();
         var spawnRecords = new HashSet<string>();
+        var readSpawns = new HashSet<string>();
         missing = 0;
         foreach (var record in records)
         {
             if (record.Kind == RecordKind.Spawn)
                 spawnRecords.Add(record.Guid);
             if (WorldRecords.Read(memory, record) is { } state)
+            {
                 states[(int)record.Kind][record.Guid] = state;
+                if (record.Kind == RecordKind.Spawn)
+                    readSpawns.Add(record.Guid);
+            }
             else
                 missing++;
+        }
+
+        // A quest's spawn is deleted when picked up (see the class remarks).
+        foreach (var id in ids.QuestSpawnIds)
+        {
+            if (readSpawns.Contains(id))
+                _seenQuestSpawns.Add(id);
+            else if (_seenQuestSpawns.Contains(id))
+                states[(int)RecordKind.Spawn][id] = ObjectState.Collected;
         }
 
         // Spawns with no record at all have been picked up (see the class remarks).

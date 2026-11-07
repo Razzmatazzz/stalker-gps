@@ -38,6 +38,9 @@ public partial class MainWindow : Window
         services.AddSingleton<Localizer>();
         services.AddSingleton<PositionTracker>();
         services.AddSingleton<WorldStateTracker>();
+        services.AddSingleton<ArtifactTracker>();
+        services.AddSingleton<QuestTracker>();
+        services.AddSingleton<BarricadeTracker>();
         services.AddSingleton<PositionServer>();
         services.AddSingleton<MapControlMemory>();
 
@@ -64,6 +67,9 @@ public partial class MainWindow : Window
         // Tracking and the map server run for the app's whole lifetime; tracking waits for the game on its own.
         _services.GetRequiredService<PositionTracker>().Start();
         _services.GetRequiredService<WorldStateTracker>().Start();
+        _services.GetRequiredService<ArtifactTracker>().Start();
+        _services.GetRequiredService<QuestTracker>().Start();
+        _services.GetRequiredService<BarricadeTracker>().Start();
         _services.GetRequiredService<MapControlMemory>();
         _services.GetRequiredService<PositionServer>().Start();
         ApplyOverlaySetting();

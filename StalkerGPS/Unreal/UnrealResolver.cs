@@ -15,10 +15,37 @@ namespace StalkerGPS.Unreal;
 /// → RootComponent → RelativeLocation (FVector of doubles). The facing direction is the
 /// PlayerController's ControlRotation (FRotator of doubles: pitch, yaw, roll), i.e. where the camera looks.
 /// </remarks>
+/// <summary>
+/// An artifact in the world. <see cref="Id"/> is its ID on the map (e.g. GArtifactWrenched); a quest
+/// artifact made from another artifact's blueprint has that artifact's ID. X, Y and Z are in cm.
+/// </summary>
+public readonly record struct LiveArtifact(string Id, double X, double Y, double Z);
+
 public sealed class UnrealResolver
 {
     private const int ObjectsPerChunk = 64 * 1024;
     private const int ClassDefaultObjectFlag = 0x10;
+    private const int TemplateObjectFlags = ClassDefaultObjectFlag | 0x20;
+
+    // Artifacts' blueprints are named BP_<ID>_C, except these.
+    private static readonly Dictionary<string, string> ArtifactIdsByClass = new()
+    {
+        ["BP_AArtifactBall_C"] = "AArtifactWeirdBall",
+        ["BP_AArtifactWater_C"] = "AArtifactWeirdWater",
+        ["BP_AArtifactNut_C"] = "AArtifactWeirdNut",
+        ["BP_AArtifactFlower_C"] = "AArtifactWeirdFlower",
+        ["BP_AArtifactBolt_C"] = "AArtifactWeirdBolt",
+        ["BP_AArtifactKettle_C"] = "AArtifactWeirdKettle",
+        ["BP_QArtifact_Heart_C"] = "QuestArtifactHeartofChornobyl",
+        ["BP_QArtifact_Chimera_C"] = "DLC01_ArtifactHeartofChimera",
+        ["BP_AArtifact_CNPP_BigShard_C"] = "AArtifactCNPPShard",
+        ["BP_AArtifact_CNPP_FinalRestored_C"] = "AArtifactCNPP_MainFinal",
+        ["BP_AArtifact_CNPP_SmallShard_2_C"] = "AArtifactCNPP_SmallShard_2",
+        ["BP_AArtifact_CNPP_SmallShard_3_C"] = "AArtifactCNPP_SmallShard_3",
+        ["BP_AArtifact_CNPP_SmallShard_4_C"] = "AArtifactCNPP_SmallShard_4",
+        ["BP_AArtifact_CNPP_SmallShard_5_C"] = "AArtifactCNPP_SmallShard_5",
+        ["BP_AArtifact_CNPP_SmallShard_6_C"] = "AArtifactCNPP_SmallShard_6",
+    };
 
     // UObject layout, stable since UE4.
     private const int ObjFlags = 0x08;
@@ -33,8 +60,11 @@ public sealed class UnrealResolver
     private readonly int _objectItemSize;
     private readonly Dictionary<int, string> _nameCache = [];
 
+    private ReflectionLayout? _layout;
     private nint _worldClass;
     private Offsets _offsets;
+    private nint _artifactClass;
+    private readonly Dictionary<nint, bool> _artifactClasses = [];
     private List<nint> _gworldCandidates = [];
     private nint _lastPawn;
     private DateTime _lastWorldSearch;
@@ -127,6 +157,40 @@ public sealed class UnrealResolver
         return true;
     }
 
+    /// <summary>Lists the artifacts in the world. Walks every object, so call it from a background thread, and not often.</summary>
+    public List<LiveArtifact> ReadArtifacts()
+    {
+        var artifacts = new List<LiveArtifact>();
+        if (_artifactClass == 0)
+            return artifacts;
+        foreach (var (address, cls) in ReadAllObjects())
+        {
+            if (!IsArtifactClass(cls) || (_mem.ReadInt32(address + ObjFlags) & TemplateObjectFlags) != 0)
+                continue;
+            var root = _mem.ReadPointer(address + _offsets.RootComponent);
+            if (root == 0 || !_mem.TryReadVector3d(root + _offsets.RelativeLocation, out var v))
+                continue;
+            artifacts.Add(new LiveArtifact(ArtifactId(ObjectName(cls)), Math.Round(v.X), Math.Round(v.Y), Math.Round(v.Z)));
+        }
+        artifacts.Sort((a, b) => (a.Id, a.X, a.Y).CompareTo((b.Id, b.X, b.Y)));
+        return artifacts;
+    }
+
+    private static string ArtifactId(string className) =>
+        ArtifactIdsByClass.TryGetValue(className, out var id) ? id
+            : className.StartsWith("BP_") && className.EndsWith("_C") ? className[3..^2]
+            : className;
+
+    private bool IsArtifactClass(nint cls)
+    {
+        if (_artifactClasses.TryGetValue(cls, out var known))
+            return known;
+        bool isArtifact = false;
+        for (var c = cls; c != 0 && !isArtifact; c = _mem.ReadPointer(c + _layout!.SuperStruct))
+            isArtifact = c == _artifactClass;
+        return _artifactClasses[cls] = isArtifact;
+    }
+
     private bool Initialize(out string? error)
     {
         error = null;
@@ -139,6 +203,9 @@ public sealed class UnrealResolver
             error = "Engine class table not found.";
             return false;
         }
+
+        // Only artifacts need it, so the position still works without it.
+        _artifactClass = objects.FirstOrDefault(o => o.Class == classClass && ObjectName(o.Address) == "Artifact").Address;
 
         var wanted = new HashSet<string> { "World", "GameInstance", "Player", "Controller", "PlayerController", "Actor", "SceneComponent" };
         var classes = new Dictionary<string, nint>();
@@ -162,6 +229,8 @@ public sealed class UnrealResolver
             error = "Unrecognized engine reflection layout.";
             return false;
         }
+
+        _layout = layout;
 
         int Find(string cls, string prop) => layout.FindPropertyOffset(this, classes[cls], prop);
         _offsets = new Offsets(

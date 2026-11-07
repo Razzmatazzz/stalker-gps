@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Threading.Channels;
 using StalkerGPS.Game;
 using StalkerGPS.Localization;
+using StalkerGPS.Unreal;
 
 namespace StalkerGPS.Services;
 
@@ -23,10 +24,13 @@ namespace StalkerGPS.Services;
 /// <c>{"type":"position","x":..,"y":..,"z":..,"yaw":..}</c> (Unreal units, centimeters; yaw is the
 /// camera heading in degrees, 0 to 360, 0 = +X and 90 = +Y, or null if unknown),
 /// <c>{"type":"doors","doors":[{"guid":..,"locked":..}, ...]}</c> with every known door,
-/// <c>{"type":"spawns","spawns":[{"id":..,"collected":..}, ...]}</c> with every known world spawn, and
-/// <c>{"type":"stashes","stashes":[{"guid":..,"marked":..,"looted":..}, ...]}</c> with every known stash.
+/// <c>{"type":"spawns","spawns":[{"id":..,"collected":..}, ...]}</c> with every known world spawn,
+/// <c>{"type":"stashes","stashes":[{"guid":..,"marked":..,"looted":..}, ...]}</c> with every known stash,
+/// <c>{"type":"artifacts","artifacts":[{"id":..,"x":..,"y":..,"z":..}, ...]}</c> with the artifacts loaded around the player,
+/// <c>{"type":"objectives","objectives":[{"id":..,"journalQuest":..}, ...],"targets":[{"x":..,"y":..,"z":..,"objectives":[..]}, ...]}</c> with the active quest markers, and
+/// <c>{"type":"barricades","barricades":[{"id":..,"planks":..,"destroyed":..,"cleared":..}, ...]}</c> with every barricade on the map.
 /// The current state is sent right after connecting; afterwards a message is sent when its contents
-/// change. Doors, spawns and stashes messages always hold the full list, so the latest one is all a
+/// change. Doors, spawns, stashes, artifacts, objectives and barricades messages always hold the full list, so the latest one is all a
 /// client needs. The map sends <c>mapControls</c> and <c>mapState</c> describing what it can be told
 /// to do, and the app sends <c>mapCommand</c> (see <see cref="MapControlSet"/>).
 /// </remarks>
@@ -54,6 +58,9 @@ public sealed class PositionServer : IDisposable
 
     private readonly PositionTracker _tracker;
     private readonly WorldStateTracker _world;
+    private readonly ArtifactTracker _artifacts;
+    private readonly QuestTracker _quests;
+    private readonly BarricadeTracker _barricades;
     private readonly SettingsStore _settings;
     private readonly Localizer _localizer;
     private readonly ConcurrentDictionary<Client, byte> _clients = new();
@@ -63,6 +70,9 @@ public sealed class PositionServer : IDisposable
     private string? _lastStatus;
     private string? _lastPosition;
     private readonly string?[] _lastWorld = new string?[Enum.GetValues<RecordKind>().Length];
+    private string? _lastArtifacts;
+    private string? _lastObjectives;
+    private string? _lastBarricades;
     private int _nextCommandId;
 
     /// <summary>The port being listened on, or null if the server isn't running.</summary>
@@ -89,14 +99,20 @@ public sealed class PositionServer : IDisposable
     /// </summary>
     public event Action? Changed;
 
-    public PositionServer(PositionTracker tracker, WorldStateTracker world, SettingsStore settings, Localizer localizer)
+    public PositionServer(PositionTracker tracker, WorldStateTracker world, ArtifactTracker artifacts, QuestTracker quests, BarricadeTracker barricades, SettingsStore settings, Localizer localizer)
     {
         _tracker = tracker;
         _world = world;
+        _artifacts = artifacts;
+        _quests = quests;
+        _barricades = barricades;
         _settings = settings;
         _localizer = localizer;
         _tracker.Changed += OnTrackerChanged;
         _world.KindChanged += OnWorldChanged;
+        _artifacts.Changed += OnArtifactsChanged;
+        _quests.Changed += OnQuestsChanged;
+        _barricades.Changed += OnBarricadesChanged;
         _localizer.Changed += OnLanguageChanged;
     }
 
@@ -215,6 +231,12 @@ public sealed class PositionServer : IDisposable
                     if (_lastWorld[(int)kind] is { } latest)
                         client.SetLatest(kind, latest);
                 }
+                if (_lastArtifacts is not null)
+                    client.SetLatestArtifacts(_lastArtifacts);
+                if (_lastObjectives is not null)
+                    client.SetLatestObjectives(_lastObjectives);
+                if (_lastBarricades is not null)
+                    client.SetLatestBarricades(_lastBarricades);
             }
             await client.RunAsync(ct);
         }
@@ -348,6 +370,33 @@ public sealed class PositionServer : IDisposable
             client.SetLatest(kind, message);
     }
 
+    private void OnArtifactsChanged()
+    {
+        var message = JsonSerializer.Serialize(new ArtifactsMessage("artifacts", _artifacts.Artifacts), JsonOptions);
+        lock (_stateLock)
+            _lastArtifacts = message;
+        foreach (var client in _clients.Keys)
+            client.SetLatestArtifacts(message);
+    }
+
+    private void OnQuestsChanged()
+    {
+        var message = JsonSerializer.Serialize(new ObjectivesMessage("objectives", _quests.Objectives, _quests.Targets), JsonOptions);
+        lock (_stateLock)
+            _lastObjectives = message;
+        foreach (var client in _clients.Keys)
+            client.SetLatestObjectives(message);
+    }
+
+    private void OnBarricadesChanged()
+    {
+        var message = JsonSerializer.Serialize(new BarricadesMessage("barricades", _barricades.Barricades), JsonOptions);
+        lock (_stateLock)
+            _lastBarricades = message;
+        foreach (var client in _clients.Keys)
+            client.SetLatestBarricades(message);
+    }
+
     /// <summary>Tells the map to set a control to <paramref name="value"/> (or none, for an action) or move it by <paramref name="delta"/>.</summary>
     public void SendMapCommand(string control, object? value = null, double? delta = null)
     {
@@ -404,6 +453,9 @@ public sealed class PositionServer : IDisposable
     {
         _tracker.Changed -= OnTrackerChanged;
         _world.KindChanged -= OnWorldChanged;
+        _artifacts.Changed -= OnArtifactsChanged;
+        _quests.Changed -= OnQuestsChanged;
+        _barricades.Changed -= OnBarricadesChanged;
         _localizer.Changed -= OnLanguageChanged;
         Stop();
     }
@@ -428,6 +480,12 @@ public sealed class PositionServer : IDisposable
 
     private sealed record StashEntry(string Guid, bool Marked, bool Looted);
 
+    private sealed record ArtifactsMessage(string Type, IReadOnlyList<LiveArtifact> Artifacts);
+
+    private sealed record ObjectivesMessage(string Type, IReadOnlyList<LiveObjective> Objectives, IReadOnlyList<QuestTarget> Targets);
+
+    private sealed record BarricadesMessage(string Type, IReadOnlyList<BarricadeState> Barricades);
+
     /// <summary>One connected browser. Sends are queued so a slow client never blocks the tracker.</summary>
     private sealed class Client(WebSocket socket, Action<Client, string> onMessage)
     {
@@ -437,10 +495,13 @@ public sealed class PositionServer : IDisposable
         private readonly Channel<string> _outgoing = Channel.CreateBounded<string>(
             new BoundedChannelOptions(16) { FullMode = BoundedChannelFullMode.DropOldest, SingleReader = true });
 
-        // The latest doors, spawns, stashes and language messages wait here instead of in the queue,
+        // The latest doors, spawns, stashes, language, artifacts, objectives and barricades messages wait here instead of in the queue,
         // where they could be dropped; only the newest of each kind matters.
         private static readonly int LanguageSlot = Enum.GetValues<RecordKind>().Length;
-        private readonly string?[] _pending = new string?[LanguageSlot + 1];
+        private static readonly int ArtifactsSlot = LanguageSlot + 1;
+        private static readonly int ObjectivesSlot = ArtifactsSlot + 1;
+        private static readonly int BarricadesSlot = ObjectivesSlot + 1;
+        private readonly string?[] _pending = new string?[BarricadesSlot + 1];
         private static readonly string PendingSignal = new("pending".AsSpan());
 
         private static long _lastId;
@@ -454,6 +515,12 @@ public sealed class PositionServer : IDisposable
         public void SetLatest(RecordKind kind, string message) => SetPending((int)kind, message);
 
         public void SetLatestLanguage(string message) => SetPending(LanguageSlot, message);
+
+        public void SetLatestArtifacts(string message) => SetPending(ArtifactsSlot, message);
+
+        public void SetLatestObjectives(string message) => SetPending(ObjectivesSlot, message);
+
+        public void SetLatestBarricades(string message) => SetPending(BarricadesSlot, message);
 
         private void SetPending(int slot, string message)
         {
