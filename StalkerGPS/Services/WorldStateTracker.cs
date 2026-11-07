@@ -43,6 +43,8 @@ public sealed class WorldStateTracker : IDisposable
     private IReadOnlyDictionary<string, ObjectState>[] _states = EmptyStates();
     private int _recordCount;
 
+    private MapData _ids = MapData.Empty;
+
     // Quest spawns whose record has been read since the records were last found.
     private readonly HashSet<string> _seenQuestSpawns = [];
 
@@ -54,6 +56,16 @@ public sealed class WorldStateTracker : IDisposable
 
     /// <summary>Each stash found (<see cref="ObjectState.Marked"/>, <see cref="ObjectState.Looted"/>), by GUID.</summary>
     public IReadOnlyDictionary<string, ObjectState> Stashes => _states[(int)RecordKind.Stash];
+
+    /// <summary>Where the stashes that have been looted are.</summary>
+    public IReadOnlyList<StashPlace> LootedStashPlaces
+    {
+        get
+        {
+            var stashes = Stashes;
+            return [.. _ids.Places.Where(p => stashes.TryGetValue(p.Guid, out var state) && state.HasFlag(ObjectState.Looted))];
+        }
+    }
 
     /// <summary>What the tracker is doing or why it has nothing, for display in the current language.</summary>
     public Func<Strings, string>? Message { get; private set; }
@@ -115,7 +127,7 @@ public sealed class WorldStateTracker : IDisposable
                         if (records.Count == 0 && ids.IsEmpty)
                         {
                             SetMessage(s => s.WorldDownloading);
-                            ids = await MapData.LoadAsync(ct);
+                            _ids = ids = await MapData.LoadAsync(ct);
                             if (ids.IsEmpty)
                             {
                                 SetMessage(s => s.WorldDownloadFailed);

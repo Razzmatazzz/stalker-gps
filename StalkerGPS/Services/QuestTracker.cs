@@ -54,6 +54,7 @@ public sealed class QuestTracker : IDisposable
 
     private readonly SettingsStore _settings;
     private readonly PositionTracker _tracker;
+    private readonly WorldStateTracker _world;
     private CancellationTokenSource? _cts;
     private Task? _loop;
     private MemoryRegion? _objectTable;
@@ -71,10 +72,11 @@ public sealed class QuestTracker : IDisposable
     /// <summary>Raised when an objective or target appears, moves or goes away.</summary>
     public event Action? Changed;
 
-    public QuestTracker(SettingsStore settings, PositionTracker tracker)
+    public QuestTracker(SettingsStore settings, PositionTracker tracker, WorldStateTracker world)
     {
         _settings = settings;
         _tracker = tracker;
+        _world = world;
     }
 
     public void Start()
@@ -183,6 +185,10 @@ public sealed class QuestTracker : IDisposable
 
     private void Match(List<QuestMarker> markers, ObjectiveMap map, Dictionary<uint, string> owners)
     {
+        // The game keeps a quest's marker on a stash after the stash is looted, but no longer shows it.
+        var looted = _world.LootedStashPlaces;
+        markers = [.. markers.Where(m => m.Owner is not null
+            || !looted.Any(p => Math.Abs(p.X - m.X) <= MatchDistance && Math.Abs(p.Y - m.Y) <= MatchDistance))];
         var found = markers.Select(m => (Marker: m, Possible: Possible(m, map, owners))).ToList();
         var quests = JournalQuests(found.Select(f => (f.Marker, ThisStage(f.Possible, f.Marker, map))));
 

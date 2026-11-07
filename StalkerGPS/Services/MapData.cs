@@ -11,8 +11,11 @@ namespace StalkerGPS.Services;
 /// as bunker doors and levers that a quest's signal switches on). They tell <see cref="WorldStateTracker"/>
 /// what to look for. Downloaded from the site and cached so tracking also works offline.
 /// </summary>
+/// <summary>Where a stash is on the map, in cm.</summary>
+public sealed record StashPlace(string Guid, double X, double Y);
+
 public sealed record MapData(IReadOnlyList<string> DoorGuids, IReadOnlyList<string> SpawnIds, IReadOnlyList<string> QuestSpawnIds,
-    IReadOnlyList<string> StashGuids, IReadOnlyList<string>? DeviceGuids = null)
+    IReadOnlyList<string> StashGuids, IReadOnlyList<string>? DeviceGuids = null, IReadOnlyList<StashPlace>? StashPlaces = null)
 {
     private const string DataUrl = "https://assets.stalker.vodka/data/";
     // Keys are in "items", as they are for the website; "keys.json" is an old file that is no longer updated.
@@ -22,7 +25,11 @@ public sealed record MapData(IReadOnlyList<string> DoorGuids, IReadOnlyList<stri
     private static readonly string CachePath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "StalkerGPS", "map-ids.json");
 
-    public static MapData Empty { get; } = new([], [], [], [], []);
+    public static MapData Empty { get; } = new([], [], [], [], [], []);
+
+    /// <summary>Where each stash is; never null.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public IReadOnlyList<StashPlace> Places => StashPlaces ?? [];
 
     /// <summary>The GUIDs of locks other than doors; never null.</summary>
     [System.Text.Json.Serialization.JsonIgnore]
@@ -45,12 +52,19 @@ public sealed record MapData(IReadOnlyList<string> DoorGuids, IReadOnlyList<stri
                 devices = Ids(locks.RootElement.EnumerateArray().Where(l => !IsDoor(l)).Select(Guid));
             }
             List<string> stashes;
+            List<StashPlace> stashPlaces;
             using (var stashData = await DownloadAsync(http, "stashes", ct))
             {
                 // Named like the locks' "guid" or the spawns' "id"; either is accepted.
-                stashes = Ids(stashData.RootElement.EnumerateArray()
-                    .Select(s => s.TryGetProperty("guid", out var guid) ? guid.GetString()
-                        : s.TryGetProperty("id", out var id) ? id.GetString() : null));
+                static string? StashId(JsonElement s) => s.TryGetProperty("guid", out var guid) ? guid.GetString()
+                    : s.TryGetProperty("id", out var id) ? id.GetString() : null;
+                stashes = Ids(stashData.RootElement.EnumerateArray().Select(StashId));
+                stashPlaces = [.. stashData.RootElement.EnumerateArray()
+                    .Select(s => (Id: StashId(s), Location: s.TryGetProperty("location", out var l) && l.ValueKind == JsonValueKind.Object ? l : default))
+                    .Where(s => s.Id is not null && IsGuid(s.Id) && s.Location.ValueKind == JsonValueKind.Object
+                        && s.Location.TryGetProperty("X", out var x) && x.ValueKind == JsonValueKind.Number
+                        && s.Location.TryGetProperty("Y", out var y) && y.ValueKind == JsonValueKind.Number)
+                    .Select(s => new StashPlace(s.Id!, s.Location.GetProperty("X").GetDouble(), s.Location.GetProperty("Y").GetDouble()))];
             }
             var spawns = new List<string>();
             var questSpawns = new List<string>();
@@ -66,7 +80,7 @@ public sealed record MapData(IReadOnlyList<string> DoorGuids, IReadOnlyList<stri
                     .Where(spot => spot.TryGetProperty("spawnedByQuests", out var quests) && quests.ValueKind == JsonValueKind.Array && quests.GetArrayLength() > 0)
                     .Select(SpotId)));
             }
-            var data = new MapData(doors, [.. spawns.Distinct()], [.. questSpawns.Distinct()], stashes, devices);
+            var data = new MapData(doors, [.. spawns.Distinct()], [.. questSpawns.Distinct()], stashes, devices, stashPlaces);
             if (!data.IsEmpty)
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(CachePath)!);
@@ -83,7 +97,8 @@ public sealed record MapData(IReadOnlyList<string> DoorGuids, IReadOnlyList<stri
         {
             var cached = File.Exists(CachePath) ? JsonSerializer.Deserialize<MapData>(await File.ReadAllTextAsync(CachePath, ct)) : null;
             // Lists missing from a cache written by an older version come back null.
-            return cached is null ? Empty : new MapData(Valid(cached.DoorGuids), Valid(cached.SpawnIds), Valid(cached.QuestSpawnIds), Valid(cached.StashGuids), Valid(cached.DeviceGuids));
+            return cached is null ? Empty : new MapData(Valid(cached.DoorGuids), Valid(cached.SpawnIds), Valid(cached.QuestSpawnIds), Valid(cached.StashGuids), Valid(cached.DeviceGuids),
+                [.. (cached.StashPlaces ?? []).Where(p => p is not null && IsGuid(p.Guid))]);
         }
         catch (Exception ex) when (ex is JsonException or IOException)
         {

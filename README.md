@@ -163,7 +163,8 @@ right after connecting; after that, a message is sent when its contents change.
   lists the objectives with a marker at a fixed place: `id` and `journalQuest` are the same as in a
   stage in `quests.json`, and `markers` holds where the game shows it (in cm). A stage can list
   several places when the quest picks one of them, so show only the stage's markers at these
-  places. If several objectives share a location, each is listed. `targets` lists the
+  places. A marker on a stash that has been looted is left out, as the game stops showing it.
+  If several objectives share a location, each is listed. `targets` lists the
   quest markers that follow something, usually NPCs, so they move. Each target's `objectives` says
   what it's for. That's one stage once its quest is known, which the app works out from the other
   markers of that quest. Until then it's every stage that follows the object, from `markerTargets`
