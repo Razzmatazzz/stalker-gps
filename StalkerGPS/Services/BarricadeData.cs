@@ -13,7 +13,9 @@ public sealed record Barricade(string Id, IReadOnlyList<string> Planks, bool Que
 /// <summary>The barricades on the stalker.vodka map. Downloaded from the site and cached so it also works offline.</summary>
 public static class BarricadeData
 {
-    private const string DataUrl = "https://assets.stalker.vodka/data/locks.json";
+    // map.json holds the locks the map shows; locks.json is no longer updated but is still read if map.json lacks them.
+    private const string DataUrl = "https://assets.stalker.vodka/data/map.json";
+    private const string LocksUrl = "https://assets.stalker.vodka/data/locks.json";
     private static readonly TimeSpan DownloadTimeout = TimeSpan.FromSeconds(30);
 
     private static readonly string CachePath = Path.Combine(
@@ -25,9 +27,19 @@ public static class BarricadeData
         try
         {
             using var http = new HttpClient { Timeout = DownloadTimeout };
-            await using var stream = await http.GetStreamAsync(DataUrl, ct);
-            using var locks = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
-            var barricades = Parse(locks.RootElement);
+            List<Barricade> barricades;
+            await using (var stream = await http.GetStreamAsync(DataUrl, ct))
+            using (var map = await JsonDocument.ParseAsync(stream, cancellationToken: ct))
+            {
+                barricades = map.RootElement.ValueKind == JsonValueKind.Object && map.RootElement.TryGetProperty("locks", out var locks)
+                    && locks.ValueKind == JsonValueKind.Array ? Parse(locks) : [];
+            }
+            if (barricades.Count == 0)
+            {
+                await using var stream = await http.GetStreamAsync(LocksUrl, ct);
+                using var locks = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
+                barricades = Parse(locks.RootElement);
+            }
             if (barricades.Count > 0)
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(CachePath)!);

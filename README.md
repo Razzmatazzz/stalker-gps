@@ -150,7 +150,7 @@ right after connecting; after that, a message is sent when its contents change.
 - `spawns` lists whether the map's world spawns (items lying in the world) have been picked up,
   keyed by the same `id` as the items' `foundAt` entries.
 - `stashes` lists the map's stashes, keyed by the stash's GUID, read from a `guid` (or `id`) field
-  in the map's stash data. `marked` is whether the stash is shown on the player's in-game map: it
+  in the stashes of the map's `map.json`. `marked` is whether the stash is shown on the player's in-game map: it
   becomes true once the player learns of it and false again once it's looted. `looted` is whether
   the stash has been opened and has nothing left in it; a stash opened with items left in it isn't
   looted.
@@ -177,8 +177,8 @@ right after connecting; after that, a message is sent when its contents change.
   not have appeared yet, so check the count rather than assuming a cleared barricade was seen being
   broken. Each message holds the full list, so replace any earlier one. An empty list means the
   state is unknown.
-- The app downloads the map's data from `assets.stalker.vodka` to know which doors, spawns and
-  stashes to look for (and caches it for offline use), so ones added there are picked up the next
+- The app downloads the map's data from `assets.stalker.vodka` (the locks and stashes in
+  `map.json`, and the items' `foundAt` entries) to know which doors, spawns and stashes to look for (and caches it for offline use), so ones added there are picked up the next
   time the app starts. Each doors, spawns or stashes message holds the full list, so replace any
   earlier one. They arrive
   a few seconds after a save is loaded (or a minute or two if a game update has changed how the

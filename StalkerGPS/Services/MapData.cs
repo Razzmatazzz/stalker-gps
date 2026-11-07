@@ -44,22 +44,25 @@ public sealed record MapData(IReadOnlyList<string> DoorGuids, IReadOnlyList<stri
         {
             using var http = new HttpClient { Timeout = DownloadTimeout };
             List<string> doors, devices;
-            using (var locks = await DownloadAsync(http, "locks", ct))
-            {
-                static bool IsDoor(JsonElement l) => l.TryGetProperty("kind", out var kind) && kind.GetString() == "door";
-                static string? Guid(JsonElement l) => l.TryGetProperty("guid", out var guid) && guid.ValueKind == JsonValueKind.String ? guid.GetString() : null;
-                doors = Ids(locks.RootElement.EnumerateArray().Where(IsDoor).Select(Guid));
-                devices = Ids(locks.RootElement.EnumerateArray().Where(l => !IsDoor(l)).Select(Guid));
-            }
             List<string> stashes;
             List<StashPlace> stashPlaces;
-            using (var stashData = await DownloadAsync(http, "stashes", ct))
+            // map.json holds the locks and stashes the map shows; the separate files are no longer updated.
+            using (var mapDoc = await DownloadAsync(http, "map", ct))
+            using (var locksDoc = MapList(mapDoc, "locks") is null ? await DownloadAsync(http, "locks", ct) : null)
+            using (var stashDoc = MapList(mapDoc, "stashes") is null ? await DownloadAsync(http, "stashes", ct) : null)
             {
+                var lockList = MapList(mapDoc, "locks") ?? locksDoc!.RootElement;
+                var stashList = MapList(mapDoc, "stashes") ?? stashDoc!.RootElement;
+                static bool IsDoor(JsonElement l) => l.TryGetProperty("kind", out var kind) && kind.GetString() == "door";
+                static string? Guid(JsonElement l) => l.TryGetProperty("guid", out var guid) && guid.ValueKind == JsonValueKind.String ? guid.GetString() : null;
+                doors = Ids(lockList.EnumerateArray().Where(IsDoor).Select(Guid));
+                devices = Ids(lockList.EnumerateArray().Where(l => !IsDoor(l)).Select(Guid));
+
                 // Named like the locks' "guid" or the spawns' "id"; either is accepted.
                 static string? StashId(JsonElement s) => s.TryGetProperty("guid", out var guid) ? guid.GetString()
                     : s.TryGetProperty("id", out var id) ? id.GetString() : null;
-                stashes = Ids(stashData.RootElement.EnumerateArray().Select(StashId));
-                stashPlaces = [.. stashData.RootElement.EnumerateArray()
+                stashes = Ids(stashList.EnumerateArray().Select(StashId));
+                stashPlaces = [.. stashList.EnumerateArray()
                     .Select(s => (Id: StashId(s), Location: s.TryGetProperty("location", out var l) && l.ValueKind == JsonValueKind.Object ? l : default))
                     .Where(s => s.Id is not null && IsGuid(s.Id) && s.Location.ValueKind == JsonValueKind.Object
                         && s.Location.TryGetProperty("X", out var x) && x.ValueKind == JsonValueKind.Number
@@ -111,6 +114,12 @@ public sealed record MapData(IReadOnlyList<string> DoorGuids, IReadOnlyList<stri
         await using var stream = await http.GetStreamAsync($"{DataUrl}{file}.json", ct);
         return await JsonDocument.ParseAsync(stream, cancellationToken: ct);
     }
+
+    /// <summary>A list in map.json, or null if it isn't there.</summary>
+    private static JsonElement? MapList(JsonDocument map, string name) =>
+        map.RootElement.ValueKind == JsonValueKind.Object && map.RootElement.TryGetProperty(name, out var list) && list.ValueKind == JsonValueKind.Array
+            ? list
+            : null;
 
     private static string? SpotId(JsonElement spot) => spot.TryGetProperty("id", out var id) ? id.GetString() : null;
 
