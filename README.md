@@ -164,6 +164,7 @@ right after connecting; after that, a message is sent when its contents change.
   stage in `quests.json`, and `markers` holds where the game shows it (in cm). A stage can list
   several places when the quest picks one of them, so show only the stage's markers at these
   places. A marker on a stash that has been looted is left out, as the game stops showing it.
+  For a route, whose waypoints the game places all at once, only the waypoint it shows is listed.
   If several objectives share a location, each is listed. `targets` lists the
   quest markers that follow something, usually NPCs, so they move. Each target's `objectives` says
   what it's for. That's one stage once its quest is known, which the app works out from the other

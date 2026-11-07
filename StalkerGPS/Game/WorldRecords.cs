@@ -40,7 +40,9 @@ public enum ObjectState
 
 /// <summary>A record found by <see cref="WorldRecords.Scan"/>: where it is and the object it holds.</summary>
 /// <summary>A marker the game shows for a quest. X, Y and Z are in cm.</summary>
-public readonly record struct QuestMarker(double X, double Y, double Z, uint? Owner, uint Quest, int Stage);
+/// <see cref="Shown"/> is set on the marker the game is showing when a stage has several, such as
+/// the next waypoint of a route whose other waypoints are already placed.
+public readonly record struct QuestMarker(double X, double Y, double Z, uint? Owner, uint Quest, int Stage, bool Shown);
 
 public readonly record struct WorldRecord(RecordKind Kind, nint Address, uint Id, string Guid, nint AllocationBase);
 
@@ -135,6 +137,7 @@ public static class WorldRecords
     private const int MarkerKindOffset = 0xA8;
     private const int MarkerQuestOffset = 0x90;
     private const int MarkerStageOffset = 0x94;
+    private const int MarkerShownOffset = 0x80; // a byte: 3 while the game shows the marker, else 0
     private const byte QuestMarkerKind = 2;
     private const uint MarkerFinished = 0x20;
 
@@ -286,7 +289,8 @@ public static class WorldRecords
             if (x != 0 || y != 0)
             {
                 uint owner = BitConverter.ToUInt32(record[MarkerOwnerOffset..]);
-                markers.Add(new QuestMarker(x, y, z, owner == NoOwner ? null : owner, quest, BitConverter.ToInt32(record[MarkerStageOffset..])));
+                markers.Add(new QuestMarker(x, y, z, owner == NoOwner ? null : owner, quest, BitConverter.ToInt32(record[MarkerStageOffset..]),
+                    record[MarkerShownOffset] != 0));
             }
         });
         return walked ? markers : null;

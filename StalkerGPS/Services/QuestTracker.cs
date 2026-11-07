@@ -189,6 +189,10 @@ public sealed class QuestTracker : IDisposable
         var looted = _world.LootedStashPlaces;
         markers = [.. markers.Where(m => m.Owner is not null
             || !looted.Any(p => Math.Abs(p.X - m.X) <= MatchDistance && Math.Abs(p.Y - m.Y) <= MatchDistance))];
+        // A route's waypoints are all placed at once, but the game only shows the next one. Where it
+        // shows some of a stage's markers, the others are hidden. Some stages never set it at all.
+        var showing = markers.Where(m => m.Owner is null && m.Shown).Select(m => (m.Quest, m.Stage)).ToHashSet();
+        markers = [.. markers.Where(m => m.Owner is not null || m.Shown || !showing.Contains((m.Quest, m.Stage)))];
         var found = markers.Select(m => (Marker: m, Possible: Possible(m, map, owners))).ToList();
         var quests = JournalQuests(found.Select(f => (f.Marker, ThisStage(f.Possible, f.Marker, map))));
 
