@@ -10,7 +10,7 @@
     <!-- For NotifyIcon (tray icon); WPF has no equivalent. -->
     <UseWindowsForms>true</UseWindowsForms>
     <RootNamespace>StalkerGPS</RootNamespace>
-    <Version>1.5.0</Version>
+    <Version>1.6.0</Version>
     <!-- The game is 64-bit; reading its pointers needs a 64-bit process. -->
     <PlatformTarget>x64</PlatformTarget>
     <!-- Required by the LibraryImport source generator. -->
